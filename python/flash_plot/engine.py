@@ -1,9 +1,9 @@
 """Pure Python Flash Plot engine -- renders SVG charts matching the TypeScript FlashChart frontend.
 
 Produces SVGs visually matching the NewFlash charting engine:
-same fonts, colors, bar glow effects, and layout.
-Colab-compatible: no <style> tags, no SVG filters -- uses inline styles
-and gradient-based glow simulation that survive Colab's HTML sanitizer.
+same fonts, colors, bar glow effects, animations, and layout.
+Colab-compatible: no <style> tags, no SVG filters -- uses inline styles,
+gradient-based glow, and SVG <animate> elements that survive Colab's HTML sanitizer.
 """
 
 from __future__ import annotations
@@ -96,6 +96,28 @@ DEFAULT_INSET = 16
 AREA_GRAD_TOP = 0.15
 AREA_GRAD_BOTTOM = 0.05
 
+# ── Animation timing constants (exact match of FlashChart.tsx) ────────────
+
+T_GRID_DUR = 0.675           # grid line draw duration
+T_LABELS = 0.675             # label animations start
+T_LABEL_DUR = 0.35           # label fade duration
+T_LABEL_Y_STAGGER = 0.04    # stagger between y-axis labels
+T_LABEL_X_STAGGER = 0.03    # stagger between x-axis labels
+T_DATA = 1.28                # data elements start
+T_BAR_DUR = 0.81             # bar grow duration
+T_BAR_STAGGER = 0.054        # stagger between bars
+T_LINE_DUR = 1.89            # line draw duration
+T_AREA_DUR = 1.08            # area fade duration
+T_AREA_STAGGER = 0.135       # stagger between areas
+T_SCATTER_DUR = 0.5          # scatter pop duration
+T_SCATTER_STAGGER = 0.02     # stagger between scatter points
+T_SHIMMER = 2.5              # label shimmer start
+SHIMMER_DUR = 0.24           # shimmer cycle duration
+SHIMMER_STAGGER = 0.08       # stagger between label shimmers
+T_GLOW_EXTRA = 0.34          # extra delay after shimmer before glow
+GLOW_FADE_DUR = 0.5          # glow fade-in duration
+SPLINE_EASE_OUT = "0.22 1 0.36 1"
+
 # ── Sparkle dot positions (from FlashChart.tsx) ──────────────────────────
 
 SPARKLE_DOTS = [
@@ -185,7 +207,6 @@ def _fmt_val(v: float) -> str:
         return "0"
     if abs(v) >= 1e6:
         return f"{v:.2e}"
-    # Integer-like values: show without decimals
     if v == int(v):
         return f"{int(v):,}"
     if abs(v) >= 100:
@@ -206,9 +227,13 @@ def _dash_array(style: str) -> Optional[str]:
 
 
 def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
-    """Convert hex color to (r, g, b)."""
     h = hex_color.lstrip('#')
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _f(v: float) -> str:
+    """Format float for SVG (1 decimal)."""
+    return f"{v:.1f}"
 
 
 # ── Command types ──────────────────────────────────────────────────────────
@@ -223,7 +248,8 @@ class _PlotCmd:
 
 class FlashPlot:
     """Matplotlib-like API that renders SVG matching the Flash frontend.
-    Colab-compatible: uses only inline styles and gradients (no CSS <style> or SVG <filter>)."""
+    Colab-compatible: uses inline styles, SVG gradients, and <animate> elements.
+    No <style> tags, no <filter> elements -- survives Colab HTML sanitizer."""
 
     def __init__(self, width: int = DEFAULT_WIDTH, height: int = DEFAULT_HEIGHT):
         self.width = width
@@ -350,7 +376,11 @@ class FlashPlot:
         return self._build_svg()
 
     def show(self):
-        """Display inline in Jupyter/Colab."""
+        """Display inline in Jupyter/Colab.
+        Includes SVG animations (bar grow, glow fade, sparkle float, etc.).
+        Native SVG <title> tooltips on data points (hover to see values).
+        Note: Full interactivity (hover crosshair, settings dropdown) requires
+        the React frontend -- Colab strips JavaScript event handlers."""
         svg = self.render()
         dark_html = f'<div style="background:{BACKGROUND};padding:16px 8px;border-radius:8px">{svg}</div>'
         try:
@@ -470,16 +500,23 @@ class FlashPlot:
         # ── SVG parts ─────────────────────────────────────────────────
         parts: List[str] = []
         defs_parts: List[str] = []
-
-        # Legend collection
         legend_entries: List[Tuple[str, str, str]] = []  # (color, label, type)
 
-        # Unique gradient counter
         grad_counter = [0]
 
         def next_grad_id(prefix: str = "g") -> str:
             grad_counter[0] += 1
             return f"{prefix}{grad_counter[0]}"
+
+        # Track total bar count for glow delay calculation
+        total_bar_count = 0
+        if real_bar_cmds:
+            total_bar_count = max(len(cmd.y) for cmd in real_bar_cmds) * len(real_bar_cmds)
+        elif hist_bars:
+            total_bar_count = sum(len(hb["counts"]) for hb in hist_bars)
+
+        # Glow delay: after all bars grown + shimmer finished
+        glow_delay = T_SHIMMER + max(0, total_bar_count - 1) * SHIMMER_STAGGER + SHIMMER_DUR + T_GLOW_EXTRA
 
         # ── Title / Subtitle ──────────────────────────────────────────
         cur_y_top = 0.0
@@ -489,7 +526,10 @@ class FlashPlot:
                 f'<text x="{pa_x}" y="{cur_y_top}" '
                 f'font-size="{TITLE_SIZE}" font-weight="{TITLE_WEIGHT}" '
                 f'font-family="{TITLE_FONT}" letter-spacing="{TITLE_SPACING}" '
-                f'fill="{TITLE_COLOR}">{_esc(self._title)}</text>'
+                f'fill="{TITLE_COLOR}" opacity="0">'
+                f'{_esc(self._title)}'
+                f'<animate attributeName="opacity" from="0" to="1" dur="0.6s" begin="0s" fill="freeze"/>'
+                f'</text>'
             )
         if self._subtitle:
             cur_y_top += SUBTITLE_SIZE + 6
@@ -497,30 +537,55 @@ class FlashPlot:
                 f'<text x="{pa_x}" y="{cur_y_top}" '
                 f'font-size="{SUBTITLE_SIZE}" font-weight="{SUBTITLE_WEIGHT}" '
                 f'font-family="{SUBTITLE_FONT}" letter-spacing="{SUBTITLE_SPACING}" '
-                f'fill="{SUBTITLE_COLOR}">{_esc(self._subtitle)}</text>'
+                f'fill="{SUBTITLE_COLOR}" opacity="0">'
+                f'{_esc(self._subtitle)}'
+                f'<animate attributeName="opacity" from="0" to="1" dur="0.6s" begin="0.1s" fill="freeze"/>'
+                f'</text>'
             )
 
-        # ── Grid ──────────────────────────────────────────────────────
+        # ── Grid with draw animation ─────────────────────────────────
         if self._grid:
+            grid_idx = 0
             for yt in y_ticks:
                 yp = y_px(yt)
                 if pa_y <= yp <= pa_y + pa_h:
+                    line_len = pa_w
+                    delay = grid_idx * 0.08
                     parts.append(
-                        f'<line x1="{pa_x}" y1="{yp:.1f}" x2="{pa_x + pa_w}" y2="{yp:.1f}" '
-                        f'stroke="{GRID_COLOR}" stroke-width="{GRID_WIDTH}"/>'
+                        f'<line x1="{pa_x}" y1="{_f(yp)}" x2="{pa_x + pa_w}" y2="{_f(yp)}" '
+                        f'stroke="{GRID_COLOR}" stroke-width="{GRID_WIDTH}" '
+                        f'stroke-dasharray="{_f(line_len)}" stroke-dashoffset="{_f(line_len)}">'
+                        f'<animate attributeName="stroke-dashoffset" from="{_f(line_len)}" to="0" '
+                        f'dur="{T_GRID_DUR}s" begin="{delay:.2f}s" fill="freeze" '
+                        f'calcMode="spline" keySplines="{SPLINE_EASE_OUT}" keyTimes="0;1"/>'
+                        f'</line>'
                     )
+                    grid_idx += 1
 
-        # ── Y-axis labels ─────────────────────────────────────────────
-        for yt in y_ticks:
+        # ── Y-axis labels with fade + shimmer animation ──────────────
+        for i, yt in enumerate(y_ticks):
             yp = y_px(yt)
+            delay = T_LABELS + i * T_LABEL_Y_STAGGER
+            shimmer_begin = T_SHIMMER + i * SHIMMER_STAGGER
             parts.append(
-                f'<text x="{pa_x - 4}" y="{yp + 3:.1f}" text-anchor="end" '
+                f'<g opacity="0" transform="translate(8,0)">'
+                f'<animate attributeName="opacity" from="0" to="1" dur="{T_LABEL_DUR}s" '
+                f'begin="{delay:.3f}s" fill="freeze"/>'
+                f'<animateTransform attributeName="transform" type="translate" from="8 0" to="0 0" '
+                f'dur="{T_LABEL_DUR}s" begin="{delay:.3f}s" fill="freeze"/>'
+                f'<text x="{pa_x - 4}" y="{_f(yp + 3)}" text-anchor="end" '
                 f'font-size="{AXIS_SIZE}" font-weight="{AXIS_WEIGHT}" '
                 f'font-family="{AXIS_FONT}" letter-spacing="{AXIS_SPACING}" '
-                f'fill="{TEXT_AXIS}">{_esc(_fmt_val(yt))}</text>'
+                f'fill="{TEXT_AXIS}">'
+                f'{_esc(_fmt_val(yt))}'
+                f'<animate attributeName="fill" '
+                f'values="{TEXT_AXIS};#787878;#c4c4c4;#787878;{TEXT_AXIS}" '
+                f'dur="{SHIMMER_DUR}s" begin="{shimmer_begin:.3f}s" fill="freeze"/>'
+                f'</text>'
+                f'</g>'
             )
 
-        # ── Area / fill_between ───────────────────────────────────────
+        # ── Area / fill_between with fade animation ──────────────────
         area_idx = 0
         for cmd in fill_cmds:
             y1 = cmd.y1 if isinstance(cmd.y1, list) else [cmd.y1] * len(cmd.x)
@@ -542,16 +607,23 @@ class FlashPlot:
                     xp = x_px(cmd.x[i])
                 else:
                     xp = pa_x + (i / max(n - 1, 1)) * pa_w
-                pts_top.append(f"{xp:.1f},{y_px(y1[i]):.1f}")
-                pts_bot.append(f"{xp:.1f},{y_px(y2[i]):.1f}")
+                pts_top.append(f"{_f(xp)},{_f(y_px(y1[i]))}")
+                pts_bot.append(f"{_f(xp)},{_f(y_px(y2[i]))}")
             fwd = " ".join(f"{'M' if i == 0 else 'L'}{p}" for i, p in enumerate(pts_top))
             bwd = " ".join(f"L{p}" for p in reversed(pts_bot))
-            parts.append(f'<path d="{fwd} {bwd} Z" fill="url(#{grad_id})" opacity="{cmd.alpha}"/>')
+            area_delay = T_DATA + area_idx * T_AREA_STAGGER
+            parts.append(
+                f'<path d="{fwd} {bwd} Z" fill="url(#{grad_id})" opacity="0">'
+                f'<animate attributeName="opacity" from="0" to="{cmd.alpha}" '
+                f'dur="{T_AREA_DUR}s" begin="{area_delay:.2f}s" fill="freeze"/>'
+                f'</path>'
+            )
             if cmd.label:
                 legend_entries.append((cmd.color, cmd.label, "line"))
             area_idx += 1
 
-        # ── Lines ─────────────────────────────────────────────────────
+        # ── Lines with draw animation ────────────────────────────────
+        line_idx = 0
         for cmd in line_cmds:
             n = len(cmd.y)
             pts = []
@@ -561,29 +633,68 @@ class FlashPlot:
                 else:
                     xp = pa_x + (i / max(n - 1, 1)) * pa_w
                 yp = y_px(cmd.y[i])
-                pts.append(f"{'M' if i == 0 else 'L'}{xp:.1f},{yp:.1f}")
+                pts.append(f"{'M' if i == 0 else 'L'}{_f(xp)},{_f(yp)}")
 
             path_d = " ".join(pts)
             da = _dash_array(cmd.line_style)
             da_attr = f' stroke-dasharray="{da}"' if da else ""
-            parts.append(
-                f'<path d="{path_d}" fill="none" stroke="{cmd.color}" '
-                f'stroke-width="{cmd.line_width}" stroke-linejoin="round"{da_attr} '
-                f'opacity="{cmd.alpha}"/>'
-            )
+            line_delay = T_DATA + line_idx * 0.2
+
+            if not da:
+                # Animated line draw
+                parts.append(
+                    f'<path d="{path_d}" fill="none" stroke="{cmd.color}" '
+                    f'stroke-width="{cmd.line_width}" stroke-linejoin="round" '
+                    f'stroke-dasharray="2000" stroke-dashoffset="2000" opacity="{cmd.alpha}">'
+                    f'<animate attributeName="stroke-dashoffset" from="2000" to="0" '
+                    f'dur="{T_LINE_DUR}s" begin="{line_delay:.2f}s" fill="freeze" '
+                    f'calcMode="spline" keySplines="{SPLINE_EASE_OUT}" keyTimes="0;1"/>'
+                    f'</path>'
+                )
+            else:
+                # Dashed lines just fade in
+                parts.append(
+                    f'<path d="{path_d}" fill="none" stroke="{cmd.color}" '
+                    f'stroke-width="{cmd.line_width}" stroke-linejoin="round"{da_attr} '
+                    f'opacity="0">'
+                    f'<animate attributeName="opacity" from="0" to="{cmd.alpha}" '
+                    f'dur="0.5s" begin="{line_delay:.2f}s" fill="freeze"/>'
+                    f'</path>'
+                )
 
             # Optional area fill under line
             if cmd.fill_opacity and cmd.fill_opacity > 0:
                 base_y = y_px(0) if y_min <= 0 <= y_max else pa_y + pa_h
                 last_pt = pts[-1].split(",")
                 first_pt = pts[0][1:].split(",")
-                area_d = f"{path_d} L{last_pt[0][1:]},{base_y:.1f} L{first_pt[0]},{base_y:.1f} Z"
-                parts.append(f'<path d="{area_d}" fill="{cmd.color}" opacity="{cmd.fill_opacity}"/>')
+                area_d = f"{path_d} L{last_pt[0][1:]},{_f(base_y)} L{first_pt[0]},{_f(base_y)} Z"
+                parts.append(
+                    f'<path d="{area_d}" fill="{cmd.color}" opacity="0">'
+                    f'<animate attributeName="opacity" from="0" to="{cmd.fill_opacity}" '
+                    f'dur="{T_AREA_DUR}s" begin="{line_delay:.2f}s" fill="freeze"/>'
+                    f'</path>'
+                )
+
+            # Line data point tooltips
+            for i in range(n):
+                if cmd.x:
+                    xp = x_px(cmd.x[i])
+                else:
+                    xp = pa_x + (i / max(n - 1, 1)) * pa_w
+                yp = y_px(cmd.y[i])
+                tip_label = cmd.label or f"Series {line_idx + 1}"
+                parts.append(
+                    f'<circle cx="{_f(xp)}" cy="{_f(yp)}" r="4" fill="transparent">'
+                    f'<title>{_esc(tip_label)}: {_esc(_fmt_val(cmd.y[i]))}</title>'
+                    f'</circle>'
+                )
 
             if cmd.label:
                 legend_entries.append((cmd.color, cmd.label, "line"))
+            line_idx += 1
 
-        # ── Bars (grouped) with Colab-compatible glow ─────────────────
+        # ── Bars (grouped) with grow animation + glow ─────────────────
+        bar_global_idx = 0
         if real_bar_cmds and not hist_bars:
             num_series = len(real_bar_cmds)
             all_labels = real_bar_cmds[0].x_labels if real_bar_cmds else []
@@ -607,28 +718,63 @@ class FlashPlot:
                     ay = min(by_top, by_bot)
                     ah = max(1, abs(by_top - by_bot))
                     bw = bar_w
+                    base_y = y_px(bot)  # baseline y position
 
-                    glow_svg = self._render_bar_glow_colab(
-                        bx, ay, bw, ah, si, style, defs_parts, next_grad_id
+                    bar_delay = T_DATA + bar_global_idx * T_BAR_STAGGER
+                    x_label = str(all_labels[i]) if i < len(all_labels) else ""
+                    tip_label = cmd.label or f"Series {si + 1}"
+
+                    # Base bar rect with grow animation (height/y)
+                    parts.append(
+                        f'<rect x="{_f(bx)}" y="{_f(base_y)}" width="{_f(bw)}" height="0" '
+                        f'fill="{style["fill"]}" shape-rendering="crispEdges">'
+                        f'<animate attributeName="height" from="0" to="{_f(ah)}" '
+                        f'dur="{T_BAR_DUR}s" begin="{bar_delay:.3f}s" fill="freeze" '
+                        f'calcMode="spline" keySplines="{SPLINE_EASE_OUT}" keyTimes="0;1"/>'
+                        f'<animate attributeName="y" from="{_f(base_y)}" to="{_f(ay)}" '
+                        f'dur="{T_BAR_DUR}s" begin="{bar_delay:.3f}s" fill="freeze" '
+                        f'calcMode="spline" keySplines="{SPLINE_EASE_OUT}" keyTimes="0;1"/>'
+                        f'<title>{_esc(x_label)} - {_esc(tip_label)}: {_esc(_fmt_val(val))}</title>'
+                        f'</rect>'
+                    )
+
+                    # Glow layers (fade in after all bars + shimmer done)
+                    glow_svg = self._render_bar_glow(
+                        bx, ay, bw, ah, si, style, defs_parts, next_grad_id, glow_delay
                     )
                     parts.append(glow_svg)
+
+                    bar_global_idx += 1
 
                 if cmd.label:
                     legend_entries.append((style["fill"], cmd.label, "bar"))
                 si += 1
 
-            # X-axis labels for bars
+            # X-axis labels for bars with animation
             if all_labels:
                 for i, lbl in enumerate(all_labels):
                     cx = pa_x + (i + 0.5) * group_w
+                    delay = T_LABELS + i * T_LABEL_X_STAGGER
+                    shimmer_begin = T_SHIMMER + i * SHIMMER_STAGGER
                     parts.append(
-                        f'<text x="{cx:.1f}" y="{h - 4}" text-anchor="middle" '
+                        f'<g opacity="0" transform="translate(0,-6)">'
+                        f'<animate attributeName="opacity" from="0" to="1" dur="{T_LABEL_DUR}s" '
+                        f'begin="{delay:.3f}s" fill="freeze"/>'
+                        f'<animateTransform attributeName="transform" type="translate" from="0 -6" to="0 0" '
+                        f'dur="{T_LABEL_DUR}s" begin="{delay:.3f}s" fill="freeze"/>'
+                        f'<text x="{_f(cx)}" y="{h - 4}" text-anchor="middle" '
                         f'font-size="{AXIS_SIZE}" font-weight="{AXIS_WEIGHT}" '
                         f'font-family="{AXIS_FONT}" letter-spacing="{AXIS_SPACING}" '
-                        f'fill="{TEXT_AXIS}">{_esc(str(lbl))}</text>'
+                        f'fill="{TEXT_AXIS}">'
+                        f'{_esc(str(lbl))}'
+                        f'<animate attributeName="fill" '
+                        f'values="{TEXT_AXIS};#787878;#c4c4c4;#787878;{TEXT_AXIS}" '
+                        f'dur="{SHIMMER_DUR}s" begin="{shimmer_begin:.3f}s" fill="freeze"/>'
+                        f'</text>'
+                        f'</g>'
                     )
 
-        # ── Histogram bars ────────────────────────────────────────────
+        # ── Histogram bars with grow animation + glow ────────────────
         for hb in hist_bars:
             edges = hb["edges"]
             counts = hb["counts"]
@@ -644,24 +790,52 @@ class FlashPlot:
                 by_bot = y_px(0) if y_min <= 0 else pa_y + pa_h
                 ay = min(by_top, by_bot)
                 ah = max(0.5, abs(by_top - by_bot))
+                base_y = by_bot
 
-                glow_svg = self._render_bar_glow_colab(
-                    bx_l, ay, bw, ah, si, style, defs_parts, next_grad_id
+                bar_delay = T_DATA + bar_global_idx * T_BAR_STAGGER
+
+                # Base rect with grow animation
+                parts.append(
+                    f'<rect x="{_f(bx_l)}" y="{_f(base_y)}" width="{_f(bw)}" height="0" '
+                    f'fill="{style["fill"]}" shape-rendering="crispEdges">'
+                    f'<animate attributeName="height" from="0" to="{_f(ah)}" '
+                    f'dur="{T_BAR_DUR}s" begin="{bar_delay:.3f}s" fill="freeze" '
+                    f'calcMode="spline" keySplines="{SPLINE_EASE_OUT}" keyTimes="0;1"/>'
+                    f'<animate attributeName="y" from="{_f(base_y)}" to="{_f(ay)}" '
+                    f'dur="{T_BAR_DUR}s" begin="{bar_delay:.3f}s" fill="freeze" '
+                    f'calcMode="spline" keySplines="{SPLINE_EASE_OUT}" keyTimes="0;1"/>'
+                    f'<title>{_esc(_fmt_val(edges[i]))}-{_esc(_fmt_val(edges[i+1]))}: {int(counts[i])}</title>'
+                    f'</rect>'
+                )
+
+                # Glow layers
+                glow_svg = self._render_bar_glow(
+                    bx_l, ay, bw, ah, si, style, defs_parts, next_grad_id, glow_delay
                 )
                 parts.append(glow_svg)
+
+                bar_global_idx += 1
 
             if cmd.label:
                 legend_entries.append((style["fill"], cmd.label, "bar"))
 
-        # ── Scatter ───────────────────────────────────────────────────
+        # ── Scatter with pop animation ───────────────────────────────
         for cmd in scatter_cmds:
             for i in range(len(cmd.x)):
                 xp = x_px(cmd.x[i])
                 yp = y_px(cmd.y[i])
                 r = math.sqrt(cmd.size) if isinstance(cmd.size, (int, float)) else 2
+                pop_delay = T_DATA + i * T_SCATTER_STAGGER
+                tip_label = cmd.label or "Point"
                 parts.append(
-                    f'<circle cx="{xp:.1f}" cy="{yp:.1f}" r="{r:.1f}" '
-                    f'fill="{cmd.color}" opacity="{cmd.alpha}"/>'
+                    f'<circle cx="{_f(xp)}" cy="{_f(yp)}" r="0" '
+                    f'fill="{cmd.color}" opacity="0">'
+                    f'<animate attributeName="r" from="0" to="{_f(r)}" '
+                    f'dur="{T_SCATTER_DUR}s" begin="{pop_delay:.3f}s" fill="freeze"/>'
+                    f'<animate attributeName="opacity" from="0" to="{cmd.alpha}" '
+                    f'dur="{T_SCATTER_DUR}s" begin="{pop_delay:.3f}s" fill="freeze"/>'
+                    f'<title>{_esc(tip_label)}: ({_esc(_fmt_val(cmd.x[i]))}, {_esc(_fmt_val(cmd.y[i]))})</title>'
+                    f'</circle>'
                 )
             if cmd.label:
                 legend_entries.append((cmd.color, cmd.label, "scatter"))
@@ -673,7 +847,7 @@ class FlashPlot:
                 da = _dash_array(cmd.line_style)
                 da_attr = f' stroke-dasharray="{da}"' if da else ""
                 parts.append(
-                    f'<line x1="{pa_x}" y1="{yp:.1f}" x2="{pa_x + pa_w}" y2="{yp:.1f}" '
+                    f'<line x1="{pa_x}" y1="{_f(yp)}" x2="{pa_x + pa_w}" y2="{_f(yp)}" '
                     f'stroke="{cmd.color}" stroke-width="{cmd.line_width}"{da_attr}/>'
                 )
             elif cmd.kind == "vline":
@@ -681,7 +855,7 @@ class FlashPlot:
                 da = _dash_array(cmd.line_style)
                 da_attr = f' stroke-dasharray="{da}"' if da else ""
                 parts.append(
-                    f'<line x1="{xp:.1f}" y1="{pa_y}" x2="{xp:.1f}" y2="{pa_y + pa_h}" '
+                    f'<line x1="{_f(xp)}" y1="{pa_y}" x2="{_f(xp)}" y2="{pa_y + pa_h}" '
                     f'stroke="{cmd.color}" stroke-width="{cmd.line_width}"{da_attr}/>'
                 )
             elif cmd.kind == "text":
@@ -706,17 +880,30 @@ class FlashPlot:
                 )
                 parts.append(f'<g>{"".join(ann_parts)}</g>')
 
-        # ── X-axis labels (for non-bar charts) ───────────────────────
+        # ── X-axis labels (for non-bar charts) with animation ────────
         if not real_bar_cmds or hist_bars:
             if self._xticks and isinstance(self._xticks[0], str):
                 n = len(self._xticks)
                 for i, lbl in enumerate(self._xticks):
                     xp = pa_x + (i / max(n - 1, 1)) * pa_w
+                    delay = T_LABELS + i * T_LABEL_X_STAGGER
+                    shimmer_begin = T_SHIMMER + i * SHIMMER_STAGGER
                     parts.append(
-                        f'<text x="{xp:.1f}" y="{h - 4}" text-anchor="middle" '
+                        f'<g opacity="0" transform="translate(0,-6)">'
+                        f'<animate attributeName="opacity" from="0" to="1" dur="{T_LABEL_DUR}s" '
+                        f'begin="{delay:.3f}s" fill="freeze"/>'
+                        f'<animateTransform attributeName="transform" type="translate" from="0 -6" to="0 0" '
+                        f'dur="{T_LABEL_DUR}s" begin="{delay:.3f}s" fill="freeze"/>'
+                        f'<text x="{_f(xp)}" y="{h - 4}" text-anchor="middle" '
                         f'font-size="{AXIS_SIZE}" font-weight="{AXIS_WEIGHT}" '
                         f'font-family="{AXIS_FONT}" letter-spacing="{AXIS_SPACING}" '
-                        f'fill="{TEXT_AXIS}">{_esc(str(lbl))}</text>'
+                        f'fill="{TEXT_AXIS}">'
+                        f'{_esc(str(lbl))}'
+                        f'<animate attributeName="fill" '
+                        f'values="{TEXT_AXIS};#787878;#c4c4c4;#787878;{TEXT_AXIS}" '
+                        f'dur="{SHIMMER_DUR}s" begin="{shimmer_begin:.3f}s" fill="freeze"/>'
+                        f'</text>'
+                        f'</g>'
                     )
             elif has_numeric_x:
                 if hist_bars:
@@ -726,23 +913,36 @@ class FlashPlot:
                         tick_vals = edges
                     else:
                         step_i = math.ceil(len(edges) / max_labels)
-                        tick_vals = [e for i, e in enumerate(edges) if i % step_i == 0]
+                        tick_vals = [e for idx, e in enumerate(edges) if idx % step_i == 0]
                         if tick_vals[-1] != edges[-1]:
                             tick_vals.append(edges[-1])
                 else:
                     tick_vals = x_ticks_num
 
-                for tv in tick_vals:
+                for i, tv in enumerate(tick_vals):
                     xp = x_px(tv)
                     if pa_x - 2 <= xp <= pa_x + pa_w + 2:
+                        delay = T_LABELS + i * T_LABEL_X_STAGGER
+                        shimmer_begin = T_SHIMMER + i * SHIMMER_STAGGER
                         parts.append(
-                            f'<text x="{xp:.1f}" y="{h - 4}" text-anchor="middle" '
+                            f'<g opacity="0" transform="translate(0,-6)">'
+                            f'<animate attributeName="opacity" from="0" to="1" dur="{T_LABEL_DUR}s" '
+                            f'begin="{delay:.3f}s" fill="freeze"/>'
+                            f'<animateTransform attributeName="transform" type="translate" from="0 -6" to="0 0" '
+                            f'dur="{T_LABEL_DUR}s" begin="{delay:.3f}s" fill="freeze"/>'
+                            f'<text x="{_f(xp)}" y="{h - 4}" text-anchor="middle" '
                             f'font-size="{AXIS_SIZE}" font-weight="{AXIS_WEIGHT}" '
                             f'font-family="{AXIS_FONT}" letter-spacing="{AXIS_SPACING}" '
-                            f'fill="{TEXT_AXIS}">{_esc(_fmt_val(tv))}</text>'
+                            f'fill="{TEXT_AXIS}">'
+                            f'{_esc(_fmt_val(tv))}'
+                            f'<animate attributeName="fill" '
+                            f'values="{TEXT_AXIS};#787878;#c4c4c4;#787878;{TEXT_AXIS}" '
+                            f'dur="{SHIMMER_DUR}s" begin="{shimmer_begin:.3f}s" fill="freeze"/>'
+                            f'</text>'
+                            f'</g>'
                         )
 
-        # ── Legend ────────────────────────────────────────────────────
+        # ── Legend with fade animation ─────────────────────────────────
         legend_extra_h = 0
         if self._show_legend and legend_entries:
             font_size = LEGEND_SIZE
@@ -755,28 +955,35 @@ class FlashPlot:
             cx = lx
             for color, label, typ in legend_entries:
                 sw = font_size
+                legend_item = ""
                 if typ == "bar":
-                    parts.append(
-                        f'<rect x="{cx:.1f}" y="{ly + 2:.1f}" width="{sw}" '
+                    legend_item += (
+                        f'<rect x="{_f(cx)}" y="{_f(ly + 2)}" width="{sw}" '
                         f'height="{item_h - 4}" rx="2" fill="{color}"/>'
                     )
                 elif typ == "scatter":
-                    parts.append(
-                        f'<circle cx="{cx + sw / 2:.1f}" cy="{ly + item_h / 2:.1f}" '
-                        f'r="{sw / 3:.1f}" fill="{color}"/>'
+                    legend_item += (
+                        f'<circle cx="{_f(cx + sw / 2)}" cy="{_f(ly + item_h / 2)}" '
+                        f'r="{_f(sw / 3)}" fill="{color}"/>'
                     )
                 else:
-                    parts.append(
-                        f'<line x1="{cx:.1f}" y1="{ly + item_h / 2:.1f}" '
-                        f'x2="{cx + sw:.1f}" y2="{ly + item_h / 2:.1f}" '
+                    legend_item += (
+                        f'<line x1="{_f(cx)}" y1="{_f(ly + item_h / 2)}" '
+                        f'x2="{_f(cx + sw)}" y2="{_f(ly + item_h / 2)}" '
                         f'stroke="{color}" stroke-width="2"/>'
                     )
                 label_x = cx + sw + 4
-                parts.append(
-                    f'<text x="{label_x:.1f}" y="{ly + item_h / 2 + 1:.1f}" '
+                legend_item += (
+                    f'<text x="{_f(label_x)}" y="{_f(ly + item_h / 2 + 1)}" '
                     f'dominant-baseline="middle" font-size="{font_size}" '
                     f'font-family="{LEGEND_FONT}" fill="{LEGEND_TEXT_COLOR}">'
                     f'{_esc(label)}</text>'
+                )
+                parts.append(
+                    f'<g opacity="0">'
+                    f'<animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="1.5s" fill="freeze"/>'
+                    f'{legend_item}'
+                    f'</g>'
                 )
                 cx += sw + 4 + len(label) * font_size * 0.55 + gap_x
 
@@ -792,118 +999,138 @@ class FlashPlot:
         )
         return svg
 
-    def _render_bar_glow_colab(self, bx: float, ay: float, bw: float, ah: float,
-                                si: int, style: dict, defs_parts: List[str],
-                                next_grad_id) -> str:
-        """Render bar with glow effects using only gradients and opacity layers.
-        Colab-compatible: no <filter>, no <style>, no CSS animations."""
+    # ── Bar glow renderer (Colab-compatible) ──────────────────────────
+
+    def _render_bar_glow(self, bx: float, ay: float, bw: float, ah: float,
+                         si: int, style: dict, defs_parts: List[str],
+                         next_grad_id, glow_delay: float) -> str:
+        """Render bar glow using exact frontend path shapes.
+        Uses curved Bezier paths matching FlashChart.tsx, with gradient-based
+        soft edges and animated sparkle dots. No <filter> or <style> needed."""
+
+        def sc(hv: float) -> float:
+            """Scale function matching FlashChart.tsx: sc(hv) = (hv / 134) * ah"""
+            return (hv / 134.0) * ah
 
         layers: List[str] = []
 
-        # 1. Dark base rect
+        # 1. Base fill rect (same color as bar)
         layers.append(
-            f'<rect x="{bx:.1f}" y="{ay:.1f}" width="{bw:.1f}" height="{ah:.1f}" '
-            f'fill="{BAR_DEFAULT_FILL}"/>'
+            f'<rect x="{_f(bx)}" y="{_f(ay)}" width="{_f(bw)}" height="{_f(ah)}" '
+            f'fill="{style["fill"]}"/>'
         )
 
-        # 2. Main gradient fill (gradTop -> gradBottom)
-        grad_id = next_grad_id("bg")
-        defs_parts.append(
-            f'<linearGradient id="{grad_id}" x1="0" y1="0" x2="0" y2="1">'
-            f'<stop offset="0%" stop-color="{style["gradTop"]}"/>'
-            f'<stop offset="100%" stop-color="{style["gradBottom"]}"/>'
-            f'</linearGradient>'
+        # 2. Side glow -- exact curved path from FlashChart.tsx line 702
+        # Multiple opacity layers to simulate Gaussian blur (stdDeviation=5)
+        side_path = (
+            f'M{_f(bx)} {_f(ay+ah+sc(11))} '
+            f'V{_f(ay+ah-sc(0.5))} '
+            f'C{_f(bx)} {_f(ay+ah-sc(0.5))} {_f(bx+bw*0.85)} {_f(ay+ah-sc(15))} {_f(bx+bw*0.85)} {_f(ay+ah-sc(26))} '
+            f'V{_f(ay+sc(21))} '
+            f'C{_f(bx+bw*0.85)} {_f(ay+sc(14))} {_f(bx+bw*0.275)} {_f(ay+sc(7.69))} {_f(bx)} {_f(ay+sc(7.5))} '
+            f'V{_f(ay-sc(4))} '
+            f'C{_f(bx)} {_f(ay-sc(4))} {_f(bx+bw*1.225)} {_f(ay+sc(4.5))} {_f(bx+bw*1.225)} {_f(ay+sc(21))} '
+            f'V{_f(ay+ah-sc(40.5))} '
+            f'C{_f(bx+bw*1.225)} {_f(ay+ah-sc(8))} {_f(bx+bw*0.85)} {_f(ay+ah-sc(9.5))} {_f(bx)} {_f(ay+ah+sc(11))} Z'
         )
+        # Outer soft layer (simulates blur spread)
+        layers.append(f'<path d="{side_path}" fill="{style["sideGlow"]}" opacity="0.25"/>')
+        # Inner brighter layer
+        layers.append(f'<path d="{side_path}" fill="{style["sideGlow"]}" opacity="0.35"/>')
+
+        # 3. Top highlight -- rect from FlashChart.tsx line 705
+        # Multiple layers to simulate blur (stdDeviation=4)
+        th_x = bx + bw * 0.05
+        th_y = ay + sc(1)
+        th_w = bw * 0.9
+        th_h = sc(8)
+        # Outer soft
         layers.append(
-            f'<rect x="{bx:.1f}" y="{ay:.1f}" width="{bw:.1f}" height="{ah:.1f}" '
-            f'fill="url(#{grad_id})"/>'
+            f'<rect x="{_f(th_x - 1)}" y="{_f(th_y - 1)}" width="{_f(th_w + 2)}" height="{_f(th_h + 2)}" '
+            f'rx="3" fill="{style["topGlow"]}" opacity="0.2"/>'
+        )
+        # Inner bright
+        layers.append(
+            f'<rect x="{_f(th_x)}" y="{_f(th_y)}" width="{_f(th_w)}" height="{_f(th_h)}" '
+            f'rx="2" fill="{style["topGlow"]}" opacity="0.4"/>'
         )
 
-        # 3. Side glow -- gradient from transparent to glow color along left edge
-        side_grad_id = next_grad_id("sg")
-        defs_parts.append(
-            f'<linearGradient id="{side_grad_id}" x1="0" y1="0" x2="1" y2="0">'
-            f'<stop offset="0%" stop-color="{style["sideGlow"]}" stop-opacity="0.6"/>'
-            f'<stop offset="40%" stop-color="{style["sideGlow"]}" stop-opacity="0.2"/>'
-            f'<stop offset="100%" stop-color="{style["fill"]}" stop-opacity="0"/>'
-            f'</linearGradient>'
+        # 4. Bottom glow -- exact curved path from FlashChart.tsx line 708
+        bot_path = (
+            f'M{_f(bx+bw*0.05)} {_f(ay+ah-sc(8.2))} '
+            f'C{_f(bx+bw*0.05)} {_f(ay+ah-sc(9.2))} {_f(bx+bw*0.05)} {_f(ay+ah-sc(4))} {_f(bx+bw*0.17)} {_f(ay+ah-sc(1.5))} '
+            f'C{_f(bx+bw*0.28)} {_f(ay+ah+sc(0.8))} {_f(bx+bw*0.72)} {_f(ay+ah+sc(0.8))} {_f(bx+bw*0.83)} {_f(ay+ah-sc(1.5))} '
+            f'C{_f(bx+bw*0.95)} {_f(ay+ah-sc(4))} {_f(bx+bw*0.95)} {_f(ay+ah-sc(9.2))} {_f(bx+bw*0.95)} {_f(ay+ah-sc(8.2))} '
+            f'V{_f(ay+ah)} H{_f(bx+bw*0.05)} V{_f(ay+ah-sc(8.2))}Z'
         )
-        layers.append(
-            f'<rect x="{bx:.1f}" y="{ay:.1f}" width="{bw:.1f}" height="{ah:.1f}" '
-            f'fill="url(#{side_grad_id})"/>'
-        )
+        layers.append(f'<path d="{bot_path}" fill="{style["bottomGlow"]}" opacity="0.25"/>')
+        layers.append(f'<path d="{bot_path}" fill="{style["bottomGlow"]}" opacity="0.35"/>')
 
-        # 4. Left edge highlight
-        edge_w = max(1.5, bw * 0.06)
-        left_grad_id = next_grad_id("le")
-        defs_parts.append(
-            f'<linearGradient id="{left_grad_id}" x1="0" y1="0" x2="1" y2="0">'
-            f'<stop offset="0%" stop-color="{style["leftEdge"]}" stop-opacity="0.7"/>'
-            f'<stop offset="100%" stop-color="{style["leftEdge"]}" stop-opacity="0"/>'
-            f'</linearGradient>'
+        # 5. Left edge -- exact curved path from FlashChart.tsx line 711
+        left_path = (
+            f'M{_f(bx-bw*0.01)} {_f(ay+sc(4))} '
+            f'C{_f(bx+bw*0.045)} {_f(ay+sc(4))} {_f(bx+bw*0.045)} {_f(ay+sc(4))} {_f(bx+bw*0.045)} {_f(ay+sc(8))} '
+            f'V{_f(ay+ah-sc(8))} '
+            f'C{_f(bx+bw*0.045)} {_f(ay+ah-sc(4))} {_f(bx-bw*0.01)} {_f(ay+ah-sc(2))} {_f(bx-bw*0.01)} {_f(ay+ah)} '
+            f'V{_f(ay+sc(4))}Z'
         )
-        layers.append(
-            f'<rect x="{bx:.1f}" y="{ay:.1f}" width="{edge_w:.1f}" height="{ah:.1f}" '
-            f'fill="url(#{left_grad_id})"/>'
-        )
+        layers.append(f'<path d="{left_path}" fill="{style["leftEdge"]}" opacity="0.3"/>')
+        layers.append(f'<path d="{left_path}" fill="{style["leftEdge"]}" opacity="0.45"/>')
 
-        # 5. Top highlight (bright strip at top)
-        top_h = max(2, ah * 0.08)
-        top_grad_id = next_grad_id("th")
-        defs_parts.append(
-            f'<linearGradient id="{top_grad_id}" x1="0" y1="0" x2="0" y2="1">'
-            f'<stop offset="0%" stop-color="{style["topGlow"]}" stop-opacity="0.5"/>'
-            f'<stop offset="100%" stop-color="{style["topGlow"]}" stop-opacity="0"/>'
-            f'</linearGradient>'
-        )
-        layers.append(
-            f'<rect x="{bx:.1f}" y="{ay:.1f}" width="{bw:.1f}" height="{top_h:.1f}" '
-            f'fill="url(#{top_grad_id})"/>'
-        )
-
-        # 6. Bottom glow (bright strip at bottom)
-        bot_h = max(3, ah * 0.12)
-        bot_grad_id = next_grad_id("bg")
-        defs_parts.append(
-            f'<linearGradient id="{bot_grad_id}" x1="0" y1="1" x2="0" y2="0">'
-            f'<stop offset="0%" stop-color="{style["bottomGlow"]}" stop-opacity="0.5"/>'
-            f'<stop offset="100%" stop-color="{style["bottomGlow"]}" stop-opacity="0"/>'
-            f'</linearGradient>'
-        )
-        layers.append(
-            f'<rect x="{bx:.1f}" y="{ay + ah - bot_h:.1f}" width="{bw:.1f}" height="{bot_h:.1f}" '
-            f'fill="url(#{bot_grad_id})"/>'
-        )
-
-        # 7. White top edge highlight
-        top_white_h = max(1, ah * 0.04)
-        layers.append(
-            f'<rect x="{bx:.1f}" y="{ay:.1f}" width="{bw:.1f}" height="{top_white_h:.1f}" '
-            f'fill="white" opacity="0.15"/>'
-        )
-
-        # 8. White bottom edge highlight
-        bot_white_h = max(1, ah * 0.03)
-        layers.append(
-            f'<rect x="{bx:.1f}" y="{ay + ah - bot_white_h:.1f}" width="{bw:.1f}" height="{bot_white_h:.1f}" '
-            f'fill="white" opacity="0.12"/>'
-        )
-
-        # 9. Sparkle dots (static, but visible -- just circles with glow color)
-        for dot in SPARKLE_DOTS:
+        # 6. Sparkle dots with float animation (from FlashChart.tsx line 713-722)
+        for dIdx, dot in enumerate(SPARKLE_DOTS):
             dcx = bx + dot["cx"] * bw
             dcy = ay + dot["cy"] * ah
-            # Only render if inside bar bounds
-            if bx <= dcx <= bx + bw and ay <= dcy <= ay + ah:
-                layers.append(
-                    f'<circle cx="{dcx:.1f}" cy="{dcy:.1f}" r="{dot["r"]}" '
-                    f'fill="{style["sparkle"]}" opacity="0.85"/>'
-                )
+            dr = dot["r"]
+            # Animation parameters matching frontend
+            dur = 2.5 + (dIdx % 5) * 0.5
+            sp_delay = (dIdx * 0.2) % 1.5
+            # Vertical drift (upward float)
+            drift_y = 0.4 + (dIdx % 3) * 0.35
+            drift_x = 0.3 * (1 if dIdx % 2 == 0 else -1)
+            layers.append(
+                f'<circle cx="{_f(dcx)}" cy="{_f(dcy)}" r="{dr}" '
+                f'fill="{style["sparkle"]}" opacity="0.7">'
+                f'<animate attributeName="cy" '
+                f'values="{_f(dcy)};{_f(dcy - drift_y)};{_f(dcy)}" '
+                f'dur="{dur}s" begin="{sp_delay:.1f}s" repeatCount="indefinite"/>'
+                f'<animate attributeName="cx" '
+                f'values="{_f(dcx)};{_f(dcx + drift_x)};{_f(dcx)}" '
+                f'dur="{dur + 0.3}s" begin="{sp_delay:.1f}s" repeatCount="indefinite"/>'
+                f'<animate attributeName="opacity" '
+                f'values="0.7;1.0;0.7" '
+                f'dur="{dur}s" begin="{sp_delay:.1f}s" repeatCount="indefinite"/>'
+                f'</circle>'
+            )
 
-        # Wrap in a group clipped to bar bounds via nested svg
+        # 7. Bottom white triangle -- exact path from FlashChart.tsx line 725
+        bot_white = (
+            f'M{_f(bx)} {_f(ay+ah-sc(3.5))} '
+            f'L{_f(bx+bw*0.5)} {_f(ay+ah-sc(1.5))} '
+            f'L{_f(bx+bw)} {_f(ay+ah-sc(3.5))} '
+            f'V{_f(ay+ah)} H{_f(bx)} V{_f(ay+ah-sc(3.5))}Z'
+        )
+        # Outer soft (simulates blur stdDeviation=2.25)
+        layers.append(f'<path d="{bot_white}" fill="white" fill-opacity="0.4" opacity="0.3"/>')
+        # Inner bright
+        layers.append(f'<path d="{bot_white}" fill="white" fill-opacity="0.8" opacity="0.4"/>')
+
+        # 8. Top white triangle -- exact path from FlashChart.tsx line 728
+        top_white = (
+            f'M{_f(bx)} {_f(ay+sc(3.5))} '
+            f'L{_f(bx+bw*0.5)} {_f(ay+sc(1.5))} '
+            f'L{_f(bx+bw)} {_f(ay+sc(3.5))} '
+            f'V{_f(ay)} H{_f(bx)} V{_f(ay+sc(3.5))}Z'
+        )
+        layers.append(f'<path d="{top_white}" fill="white" fill-opacity="0.4" opacity="0.3"/>')
+        layers.append(f'<path d="{top_white}" fill="white" fill-opacity="0.8" opacity="0.4"/>')
+
+        # Wrap in nested <svg> for clipping + opacity fade-in animation
         return (
-            f'<svg x="{bx:.1f}" y="{ay:.1f}" width="{bw:.1f}" height="{ah:.1f}" overflow="hidden">'
-            f'<g transform="translate({-bx:.1f},{-ay:.1f})">'
+            f'<svg x="{_f(bx)}" y="{_f(ay)}" width="{_f(bw)}" height="{_f(ah)}" overflow="hidden">'
+            f'<g transform="translate({_f(-bx)},{_f(-ay)})" opacity="0">'
+            f'<animate attributeName="opacity" from="0" to="1" dur="{GLOW_FADE_DUR}s" '
+            f'begin="{glow_delay:.3f}s" fill="freeze"/>'
             f'{"".join(layers)}'
             f'</g></svg>'
         )
