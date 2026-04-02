@@ -115,6 +115,7 @@ def render_chart(spec: Dict[str, Any], *, display: bool = True) -> str:
 
     if display:
         fig.show()
+        return None
 
     return svg
 

@@ -87,8 +87,8 @@ COLOR_PALETTES = {
 # ── Layout constants (exact match of layout.ts) ──────────────────────────
 
 DEFAULT_WIDTH = 595
-DEFAULT_HEIGHT = 260
-DEFAULT_PADDING = {"top": 4, "right": 16, "bottom": 28, "left": 32}
+DEFAULT_HEIGHT = 300
+DEFAULT_PADDING = {"top": 8, "right": 16, "bottom": 28, "left": 48}
 DEFAULT_INSET = 16
 
 # ── Area gradient settings (exact match of theme.ts) ─────────────────────
@@ -382,7 +382,7 @@ class FlashPlot:
         Note: Full interactivity (hover crosshair, settings dropdown) requires
         the React frontend -- Colab strips JavaScript event handlers."""
         svg = self.render()
-        dark_html = f'<div style="background:{BACKGROUND};padding:16px 8px;border-radius:8px">{svg}</div>'
+        dark_html = f'<div style="background:{BACKGROUND};padding:20px 12px;border-radius:8px">{svg}</div>'
         try:
             from IPython.display import HTML, display
             display(HTML(dark_html))
@@ -392,7 +392,7 @@ class FlashPlot:
     def _repr_html_(self):
         """Auto-display in Jupyter."""
         svg = self.render()
-        return f'<div style="background:{BACKGROUND};padding:16px 8px;border-radius:8px">{svg}</div>'
+        return f'<div style="background:{BACKGROUND};padding:20px 12px;border-radius:8px">{svg}</div>'
 
     # ── SVG Builder ────────────────────────────────────────────────────
 
@@ -401,10 +401,17 @@ class FlashPlot:
         inset = DEFAULT_INSET
         w, h = self.width, self.height
 
+        # Calculate vertical offset for title/subtitle
+        title_offset = 0
+        if self._title:
+            title_offset += TITLE_SIZE + 8
+        if self._subtitle:
+            title_offset += SUBTITLE_SIZE + 6
+
         pa_x = pad["left"] + inset
-        pa_y = pad["top"] + inset
+        pa_y = pad["top"] + inset + title_offset
         pa_w = w - pad["left"] - pad["right"] - inset * 2
-        pa_h = h - pad["top"] - pad["bottom"] - inset * 2
+        pa_h = h - pad["top"] - pad["bottom"] - inset * 2 - title_offset
 
         # ── Collect data ranges ────────────────────────────────────────
         y_vals: List[float] = []
@@ -519,11 +526,11 @@ class FlashPlot:
         glow_delay = T_SHIMMER + max(0, total_bar_count - 1) * SHIMMER_STAGGER + SHIMMER_DUR + T_GLOW_EXTRA
 
         # ── Title / Subtitle ──────────────────────────────────────────
-        cur_y_top = 0.0
+        cur_y_top = pad["top"] + inset
         if self._title:
-            cur_y_top = TITLE_SIZE + 4
+            cur_y_top += TITLE_SIZE
             parts.append(
-                f'<text x="{pa_x}" y="{cur_y_top}" '
+                f'<text x="{pa_x}" y="{_f(cur_y_top)}" '
                 f'font-size="{TITLE_SIZE}" font-weight="{TITLE_WEIGHT}" '
                 f'font-family="{TITLE_FONT}" letter-spacing="{TITLE_SPACING}" '
                 f'fill="{TITLE_COLOR}" opacity="0">'
@@ -531,10 +538,11 @@ class FlashPlot:
                 f'<animate attributeName="opacity" from="0" to="1" dur="0.6s" begin="0s" fill="freeze"/>'
                 f'</text>'
             )
+            cur_y_top += 8
         if self._subtitle:
-            cur_y_top += SUBTITLE_SIZE + 6
+            cur_y_top += SUBTITLE_SIZE
             parts.append(
-                f'<text x="{pa_x}" y="{cur_y_top}" '
+                f'<text x="{pa_x}" y="{_f(cur_y_top)}" '
                 f'font-size="{SUBTITLE_SIZE}" font-weight="{SUBTITLE_WEIGHT}" '
                 f'font-family="{SUBTITLE_FONT}" letter-spacing="{SUBTITLE_SPACING}" '
                 f'fill="{SUBTITLE_COLOR}" opacity="0">'
@@ -573,7 +581,7 @@ class FlashPlot:
                 f'begin="{delay:.3f}s" fill="freeze"/>'
                 f'<animateTransform attributeName="transform" type="translate" from="8 0" to="0 0" '
                 f'dur="{T_LABEL_DUR}s" begin="{delay:.3f}s" fill="freeze"/>'
-                f'<text x="{pa_x - 4}" y="{_f(yp + 3)}" text-anchor="end" '
+                f'<text x="{pa_x - 8}" y="{_f(yp + 3)}" text-anchor="end" '
                 f'font-size="{AXIS_SIZE}" font-weight="{AXIS_WEIGHT}" '
                 f'font-family="{AXIS_FONT}" letter-spacing="{AXIS_SPACING}" '
                 f'fill="{TEXT_AXIS}">'
@@ -762,7 +770,7 @@ class FlashPlot:
                         f'begin="{delay:.3f}s" fill="freeze"/>'
                         f'<animateTransform attributeName="transform" type="translate" from="0 -6" to="0 0" '
                         f'dur="{T_LABEL_DUR}s" begin="{delay:.3f}s" fill="freeze"/>'
-                        f'<text x="{_f(cx)}" y="{h - 4}" text-anchor="middle" '
+                        f'<text x="{_f(cx)}" y="{_f(pa_y + pa_h + 24)}" text-anchor="middle" '
                         f'font-size="{AXIS_SIZE}" font-weight="{AXIS_WEIGHT}" '
                         f'font-family="{AXIS_FONT}" letter-spacing="{AXIS_SPACING}" '
                         f'fill="{TEXT_AXIS}">'
@@ -894,7 +902,7 @@ class FlashPlot:
                         f'begin="{delay:.3f}s" fill="freeze"/>'
                         f'<animateTransform attributeName="transform" type="translate" from="0 -6" to="0 0" '
                         f'dur="{T_LABEL_DUR}s" begin="{delay:.3f}s" fill="freeze"/>'
-                        f'<text x="{_f(xp)}" y="{h - 4}" text-anchor="middle" '
+                        f'<text x="{_f(xp)}" y="{_f(pa_y + pa_h + 24)}" text-anchor="middle" '
                         f'font-size="{AXIS_SIZE}" font-weight="{AXIS_WEIGHT}" '
                         f'font-family="{AXIS_FONT}" letter-spacing="{AXIS_SPACING}" '
                         f'fill="{TEXT_AXIS}">'
@@ -930,7 +938,7 @@ class FlashPlot:
                             f'begin="{delay:.3f}s" fill="freeze"/>'
                             f'<animateTransform attributeName="transform" type="translate" from="0 -6" to="0 0" '
                             f'dur="{T_LABEL_DUR}s" begin="{delay:.3f}s" fill="freeze"/>'
-                            f'<text x="{_f(xp)}" y="{h - 4}" text-anchor="middle" '
+                            f'<text x="{_f(xp)}" y="{_f(pa_y + pa_h + 24)}" text-anchor="middle" '
                             f'font-size="{AXIS_SIZE}" font-weight="{AXIS_WEIGHT}" '
                             f'font-family="{AXIS_FONT}" letter-spacing="{AXIS_SPACING}" '
                             f'fill="{TEXT_AXIS}">'
@@ -950,8 +958,8 @@ class FlashPlot:
             item_h = font_size + 4
             total_w = sum(font_size + 4 + len(e[1]) * font_size * 0.55 + gap_x for e in legend_entries) - gap_x
             lx = pa_x + (pa_w - total_w) / 2
-            ly = pa_y + pa_h + 64
-            legend_extra_h = font_size + 72
+            ly = pa_y + pa_h + 48
+            legend_extra_h = font_size + 56
             cx = lx
             for color, label, typ in legend_entries:
                 sw = font_size
