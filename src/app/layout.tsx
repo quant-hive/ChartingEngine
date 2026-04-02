@@ -36,12 +36,8 @@ const ebGaramond = EB_Garamond({
 });
 
 export const metadata: Metadata = {
-  title: "Flash — AI-Powered Trading Workbench",
-  description: "Your intelligent trading copilot",
-  icons: {
-    icon: "/assets/flash-logo.png",
-    apple: "/assets/flash-logo.png",
-  },
+  title: "Flash Plot — Charting Engine Playground",
+  description: "Interactive charting engine with MCP integration",
 };
 
 export default function RootLayout({
