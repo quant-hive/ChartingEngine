@@ -192,7 +192,7 @@ interface RenderResult {
   scene?: Scene;
   pieData?: { slices: { label: string; value: number; color: string }[]; donut: boolean; donutRatio: number };
   surfaceData?: { z: number[][]; x?: number[][]; y?: number[][]; wireframe: boolean };
-  candlestickData?: { open: number[]; high: number[]; low: number[]; close: number[]; labels?: string[]; ticker?: string };
+  candlestickData?: { open: number[]; high: number[]; low: number[]; close: number[]; labels?: string[]; ticker?: string; interval?: string };
   svg?: string;
   error?: string;
 }

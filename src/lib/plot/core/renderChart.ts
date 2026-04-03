@@ -655,6 +655,9 @@ export function extractCandlestickData(spec: ChartSpec) {
   const close = s.close ?? s.data ?? [];
   const n = Math.min(open.length, high.length, low.length, close.length);
   if (n === 0) return null;
+  // Extract interval from subtitle (e.g. "4h · Last 12 candles" → "4h")
+  const subtitle = (spec as any).subtitle as string | undefined;
+  const interval = subtitle?.split("·")[0]?.trim() || undefined;
   return {
     open: open.slice(0, n),
     high: high.slice(0, n),
@@ -662,6 +665,7 @@ export function extractCandlestickData(spec: ChartSpec) {
     close: close.slice(0, n),
     labels: spec.xLabels,
     ticker: s.label,
+    interval,
   };
 }
 

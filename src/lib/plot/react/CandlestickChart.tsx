@@ -1,19 +1,24 @@
 "use client";
 
 /**
- * CandlestickChart — Custom candlestick chart component matching Figma design.
+ * CandlestickChart — Custom candlestick chart matching Figma frame 332:34.
  *
- * Features:
- * - Gradient candle bodies (bullish green / bearish red) from Figma
- * - Gradient wicks with warm color at body junction
+ * Elements (all from Figma):
+ * - Gradient candle bodies (bullish green / bearish red)
+ * - Gradient wicks with warm color stops
  * - Top highlight glow on each candle body
- * - OHLC header with colored values
- * - Hover crosshair (vertical + horizontal at close price)
- * - Hover tooltip with OHLC breakdown
- * - Current price badge on y-axis (right side)
+ * - OHLC header with #242424 background pill and colored values
+ * - Ticker + interval badge (top right): "NIFTY 50 | 4h"
+ * - Timeframe selector (bottom left): 5y 1y 3m 1m 5d 1d
+ * - Calendar icon (bottom, next to timeframe)
+ * - Vertical divider between timeframe area and UTC time
+ * - UTC time display (bottom right)
+ * - Asset Prices (right y-axis, Instrument Serif)
  * - Horizontal grid lines (toggleable)
- * - Y-axis price labels on right (Instrument Serif)
- * - X-axis date labels on bottom
+ * - Left edge fade overlay
+ * - Current price badges on right axis (open + close of last candle)
+ * - Dashed price line at current close
+ * - Hover crosshair + OHLC tooltip
  * - Smooth staggered entrance animations
  * - Responsive (SVG viewBox)
  * - Theme support (dark / light / naked)
@@ -42,6 +47,9 @@ export interface CandlestickChartProps {
   grid?: boolean;
   showLegend?: boolean;
   theme?: "dark" | "light" | "naked";
+  timeframes?: string[];
+  activeTimeframe?: string;
+  onTimeframeChange?: (tf: string) => void;
 }
 
 // ── Color constants from Figma ──────────────────────────────────────────
@@ -81,6 +89,8 @@ const BULL = {
   ],
   ohlcColor: "#4ECDC4",
 };
+
+const DEFAULT_TIMEFRAMES = ["5y", "1y", "3m", "1m", "5d", "1d"];
 
 // ── CSS Animations ──────────────────────────────────────────────────────
 
@@ -126,8 +136,13 @@ const FP_CANDLE_CSS = `
 .fp-candle-light .fp-candle-grid { stroke: #e0e0e0 !important; }
 .fp-candle-light .fp-candle-separator { stroke: #ccc !important; }
 .fp-candle-light .fp-candle-crosshair { stroke: #bbb !important; }
+.fp-candle-light .fp-candle-ohlc-bg { background: #e8e8e8 !important; }
 .fp-candle-light .fp-candle-ohlc-label { color: #333 !important; }
 .fp-candle-light .fp-candle-ohlc-ticker { color: #666 !important; }
+.fp-candle-light .fp-candle-tf-btn { color: #999 !important; }
+.fp-candle-light .fp-candle-tf-active { color: #333 !important; }
+.fp-candle-light .fp-candle-utc { color: #999 !important; }
+.fp-candle-light .fp-candle-divider { border-color: #ccc !important; }
 `;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -172,10 +187,33 @@ function computePriceTicks(
 }
 
 function fmtPrice(v: number): string {
-  if (Math.abs(v) >= 10000) return v.toFixed(2);
   if (Math.abs(v) >= 100) return v.toFixed(2);
   if (Math.abs(v) >= 1) return v.toFixed(2);
   return v.toFixed(4);
+}
+
+function getUtcTimeStr(): string {
+  const now = new Date();
+  const off = -now.getTimezoneOffset();
+  const sign = off >= 0 ? "+" : "-";
+  const hh = Math.floor(Math.abs(off) / 60);
+  const h = now.getHours().toString().padStart(2, "0");
+  const m = now.getMinutes().toString().padStart(2, "0");
+  const s = now.getSeconds().toString().padStart(2, "0");
+  return `${h}:${m}:${s} (UTC${sign}${hh})`;
+}
+
+// ── Calendar icon SVG path ──────────────────────────────────────────────
+
+function CalendarIcon({ color = "#707073", size = 10 }: { color?: string; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" style={{ display: "inline-block", verticalAlign: "middle" }}>
+      <rect x="1" y="3" width="12" height="10" rx="1.5" stroke={color} strokeWidth="1.2" fill="none" />
+      <line x1="4" y1="1" x2="4" y2="4.5" stroke={color} strokeWidth="1.2" strokeLinecap="round" />
+      <line x1="10" y1="1" x2="10" y2="4.5" stroke={color} strokeWidth="1.2" strokeLinecap="round" />
+      <line x1="1" y1="6.5" x2="13" y2="6.5" stroke={color} strokeWidth="1" />
+    </svg>
+  );
 }
 
 // ── Component ───────────────────────────────────────────────────────────
@@ -189,10 +227,17 @@ export default function CandlestickChart({
   grid = true,
   showLegend = true,
   theme = "dark",
+  timeframes = DEFAULT_TIMEFRAMES,
+  activeTimeframe: propActiveTf,
+  onTimeframeChange,
 }: CandlestickChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [visible, setVisible] = useState(false);
   const [hoveredCandle, setHoveredCandle] = useState<number | null>(null);
+  const [internalActiveTf, setInternalActiveTf] = useState("1m");
+  const [utcTime, setUtcTime] = useState(getUtcTimeStr);
+
+  const activeTf = propActiveTf ?? internalActiveTf;
 
   // IntersectionObserver for entrance animation
   useEffect(() => {
@@ -211,6 +256,12 @@ export default function CandlestickChart({
     return () => obs.disconnect();
   }, []);
 
+  // Tick UTC time every second
+  useEffect(() => {
+    const id = setInterval(() => setUtcTime(getUtcTimeStr()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const { open, high, low, close, labels, ticker, interval } = data;
   const n = Math.min(open.length, high.length, low.length, close.length);
 
@@ -218,7 +269,7 @@ export default function CandlestickChart({
   const isNaked = theme === "naked";
 
   // ── Layout ──────────────────────────────────────────────────────────
-  const PAD = { top: 10, right: 62, bottom: 36, left: 14 };
+  const PAD = { top: 10, right: 62, bottom: 48, left: 14 };
   const plotW = w - PAD.left - PAD.right;
   const plotH = h - PAD.top - PAD.bottom;
   const plotX = PAD.left;
@@ -248,9 +299,10 @@ export default function CandlestickChart({
     [plotX, candleSpacing],
   );
 
-  // ── Last close for price badge ──────────────────────────────────────
+  // ── Last candle data for price badges ─────────────────────────────
   const lastClose = close[n - 1];
-  const lastIsUp = close[n - 1] >= open[n - 1];
+  const lastOpen = open[n - 1];
+  const lastIsUp = lastClose >= lastOpen;
 
   // ── Hovered candle data (default to last) ───────────────────────────
   const hIdx = hoveredCandle ?? n - 1;
@@ -260,8 +312,6 @@ export default function CandlestickChart({
   const hClose = close[hIdx];
   const hIsUp = hClose >= hOpen;
   const hColor = hIsUp ? BULL.ohlcColor : BEAR.ohlcColor;
-  const hChange = hClose - hOpen;
-  const hChangePct = (hChange / hOpen) * 100;
 
   // ── Animation timing ────────────────────────────────────────────────
   const T_GRID = 0;
@@ -277,6 +327,7 @@ export default function CandlestickChart({
     crosshair: isLight ? "#bbbbbb" : "#3a3a3e",
     yLabel: isLight ? "#333333" : "#ffffff",
     xLabel: isLight ? "#888888" : "#707073",
+    ohlcBg: isLight ? "#e8e8e8" : "#242424",
     ohlcLabel: isLight ? "#333333" : "#ffffff",
     ohlcTicker: isLight ? "#666666" : "#909092",
     tooltipBg: isLight ? "#f5f5f5" : "#1a1a1e",
@@ -284,49 +335,75 @@ export default function CandlestickChart({
     tooltipText: isLight ? "#555" : "#aaaaaa",
     tooltipHeader: isLight ? "#999" : "#808080",
     fadeBg: isLight ? "#fafafa" : "#121318",
+    tfText: isLight ? "#999" : "#707073",
+    tfActive: isLight ? "#333" : "#ffffff",
+    utcText: isLight ? "#999" : "#707073",
+    divider: isLight ? "#ccc" : "#3a3a3e",
   };
 
   const aspectPct = (h / w) * 100;
   const themeClass = isLight ? "fp-candle-light" : "";
 
+  const handleTfClick = (tf: string) => {
+    if (onTimeframeChange) {
+      onTimeframeChange(tf);
+    } else {
+      setInternalActiveTf(tf);
+    }
+  };
+
   return (
     <div className={`relative w-full ${themeClass}`} style={{ fontFamily: "'Inter', sans-serif" }}>
-      {/* ── OHLC Header ──────────────────────────────────────────────── */}
+      {/* ── Top bar: OHLC (left) + Ticker/Interval (right) ────────────── */}
       <div
-        className="flex items-center flex-wrap gap-x-1 gap-y-0 px-1 mb-1"
         style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "0 4px",
+          marginBottom: 2,
           fontSize: 10,
           fontWeight: 500,
           opacity: visible ? 1 : 0,
           transition: "opacity 0.5s ease 0.3s",
         }}
       >
-        {ticker && (
-          <span className="fp-candle-ohlc-ticker" style={{ color: colors.ohlcTicker, fontSize: 10, marginRight: 4 }}>
-            {ticker}
-          </span>
-        )}
-        {interval && (
-          <>
-            <span style={{ color: "#3a3a3a", marginRight: 2 }}>|</span>
-            <span className="fp-candle-ohlc-ticker" style={{ color: colors.ohlcTicker, fontSize: 10, marginRight: 6 }}>
-              {interval}
-            </span>
-          </>
-        )}
-        <span className="fp-candle-ohlc-label" style={{ color: colors.ohlcLabel }}>O</span>
-        <span style={{ color: hColor }}>{fmtPrice(hOpen)}</span>
-        <span className="fp-candle-ohlc-label" style={{ color: colors.ohlcLabel, marginLeft: 4 }}>H</span>
-        <span style={{ color: hColor }}>{fmtPrice(hHigh)}</span>
-        <span className="fp-candle-ohlc-label" style={{ color: colors.ohlcLabel, marginLeft: 4 }}>L</span>
-        <span style={{ color: hColor }}>{fmtPrice(hLow)}</span>
-        <span className="fp-candle-ohlc-label" style={{ color: colors.ohlcLabel, marginLeft: 4 }}>C</span>
-        <span style={{ color: hColor }}>{fmtPrice(hClose)}</span>
-        <span style={{ color: hColor, marginLeft: 6, fontSize: 9 }}>
-          {hChange >= 0 ? "+" : ""}
-          {fmtPrice(hChange)} ({hChangePct >= 0 ? "+" : ""}
-          {hChangePct.toFixed(2)}%)
-        </span>
+        {/* OHLC with background pill */}
+        <div
+          className="fp-candle-ohlc-bg"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 2,
+            background: colors.ohlcBg,
+            borderRadius: 2,
+            padding: "2px 6px",
+            fontSize: 7,
+            lineHeight: "16px",
+          }}
+        >
+          <span className="fp-candle-ohlc-label" style={{ color: colors.ohlcLabel }}>O</span>
+          <span style={{ color: hColor }}>{fmtPrice(hOpen)}</span>
+          <span className="fp-candle-ohlc-label" style={{ color: colors.ohlcLabel, marginLeft: 3 }}>H</span>
+          <span style={{ color: hColor }}>{fmtPrice(hHigh)}</span>
+          <span className="fp-candle-ohlc-label" style={{ color: colors.ohlcLabel, marginLeft: 3 }}>L</span>
+          <span style={{ color: hColor }}>{fmtPrice(hLow)}</span>
+          <span className="fp-candle-ohlc-label" style={{ color: colors.ohlcLabel, marginLeft: 3 }}>C</span>
+          <span style={{ color: hColor }}>{fmtPrice(hClose)}</span>
+        </div>
+
+        {/* Ticker + Interval (right) */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 8 }}>
+          {ticker && (
+            <span className="fp-candle-ohlc-ticker" style={{ color: colors.ohlcTicker }}>{ticker}</span>
+          )}
+          {interval && ticker && (
+            <span style={{ color: "#3a3a3e" }}>|</span>
+          )}
+          {interval && (
+            <span className="fp-candle-ohlc-ticker" style={{ color: colors.ohlcTicker }}>{interval}</span>
+          )}
+        </div>
       </div>
 
       {/* ── SVG Chart ────────────────────────────────────────────────── */}
@@ -483,7 +560,7 @@ export default function CandlestickChart({
                   <text
                     key={`xt${i}`}
                     x={x}
-                    y={plotY + plotH + 18}
+                    y={plotY + plotH + 16}
                     textAnchor="middle"
                     fontSize={8}
                     fontFamily="'Inter', sans-serif"
@@ -531,7 +608,7 @@ export default function CandlestickChart({
               const bodyCenterY = bodyTopY + bodyH / 2;
               const origin = `${cx.toFixed(1)}px ${bodyCenterY.toFixed(1)}px`;
 
-              // Highlight height
+              // Highlight height (~8% of body, min 1px)
               const hlH = Math.max(1, bodyH * 0.08);
 
               const isHovered = hoveredCandle === i;
@@ -730,11 +807,22 @@ export default function CandlestickChart({
               );
             })()}
 
-          {/* ── Current price badge (right side) ─────────────────────── */}
+          {/* ── Current price badges (right side) — last candle open + close ── */}
           {(() => {
-            const y = scaleY(lastClose);
-            if (y < plotY - 10 || y > plotY + plotH + 10) return null;
-            const bgColor = lastIsUp ? BULL.ohlcColor : BEAR.ohlcColor;
+            const closeY = scaleY(lastClose);
+            const openY = scaleY(lastOpen);
+            const badgeColor = lastIsUp ? BULL.ohlcColor : BEAR.ohlcColor;
+            const badges = [
+              { price: lastClose, y: closeY, label: "close" },
+              { price: lastOpen, y: openY, label: "open" },
+            ];
+            // Sort to avoid overlap: render higher (smaller y) first
+            badges.sort((a, b) => a.y - b.y);
+            // Nudge apart if too close
+            if (Math.abs(badges[0].y - badges[1].y) < 20) {
+              badges[0].y -= 10;
+              badges[1].y += 10;
+            }
             return (
               <g
                 style={
@@ -743,30 +831,37 @@ export default function CandlestickChart({
                     : { opacity: 0 }
                 }
               >
-                {/* Price line */}
-                <line
-                  x1={plotX}
-                  y1={y}
-                  x2={plotX + plotW}
-                  y2={y}
-                  stroke={bgColor}
-                  strokeWidth={0.5}
-                  strokeDasharray="2 3"
-                  opacity={0.35}
-                />
-                {/* Badge background */}
-                <rect x={plotX + plotW + 2} y={y - 9} width={57} height={18} fill={bgColor} rx={1} />
-                {/* Badge text */}
-                <text
-                  x={plotX + plotW + 6}
-                  y={y + 4}
-                  fontSize={11}
-                  fontFamily="var(--font-instrument-serif), 'Instrument Serif', serif"
-                  fill="#ffffff"
-                  fontWeight={400}
-                >
-                  {fmtPrice(lastClose)}
-                </text>
+                {badges.map((b) => {
+                  if (b.y < plotY - 10 || b.y > plotY + plotH + 10) return null;
+                  return (
+                    <g key={b.label}>
+                      {/* Price line */}
+                      <line
+                        x1={plotX}
+                        y1={b.y}
+                        x2={plotX + plotW}
+                        y2={b.y}
+                        stroke={badgeColor}
+                        strokeWidth={0.5}
+                        strokeDasharray="2 3"
+                        opacity={0.35}
+                      />
+                      {/* Badge background */}
+                      <rect x={plotX + plotW + 2} y={b.y - 9} width={57} height={18} fill={badgeColor} rx={1} />
+                      {/* Badge text */}
+                      <text
+                        x={plotX + plotW + 6}
+                        y={b.y + 4}
+                        fontSize={11}
+                        fontFamily="var(--font-instrument-serif), 'Instrument Serif', serif"
+                        fill="#ffffff"
+                        fontWeight={400}
+                      >
+                        {fmtPrice(b.price)}
+                      </text>
+                    </g>
+                  );
+                })}
               </g>
             );
           })()}
@@ -782,55 +877,65 @@ export default function CandlestickChart({
               style={{ pointerEvents: "none" }}
             />
           )}
-
-          {/* ── Legend (bullish/bearish) ──────────────────────────────── */}
-          {showLegend && (
-            <g
-              style={
-                visible
-                  ? ({ animation: "fp-candleFadeIn 0.5s ease 1.5s both" } as React.CSSProperties)
-                  : { opacity: 0 }
-              }
-            >
-              {/* Bullish swatch */}
-              <rect
-                x={plotX + plotW / 2 - 55}
-                y={plotY + plotH + 26}
-                width={8}
-                height={8}
-                rx={1.5}
-                fill="#8CE97E"
-              />
-              <text
-                x={plotX + plotW / 2 - 43}
-                y={plotY + plotH + 33}
-                fontSize={8}
-                fontFamily="'Inter', sans-serif"
-                fill={isLight ? "#666" : "#707073"}
-              >
-                Bullish
-              </text>
-              {/* Bearish swatch */}
-              <rect
-                x={plotX + plotW / 2 + 8}
-                y={plotY + plotH + 26}
-                width={8}
-                height={8}
-                rx={1.5}
-                fill="#FF4948"
-              />
-              <text
-                x={plotX + plotW / 2 + 20}
-                y={plotY + plotH + 33}
-                fontSize={8}
-                fontFamily="'Inter', sans-serif"
-                fill={isLight ? "#666" : "#707073"}
-              >
-                Bearish
-              </text>
-            </g>
-          )}
         </svg>
+      </div>
+
+      {/* ── Bottom bar: Timeframe (left) + Calendar + Divider + UTC time (right) ── */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "4px 6px 0",
+          fontSize: 8,
+          fontWeight: 500,
+          opacity: visible ? 1 : 0,
+          transition: "opacity 0.5s ease 1.2s",
+        }}
+      >
+        {/* Timeframe selector + calendar */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {timeframes.map((tf) => (
+            <button
+              key={tf}
+              className={`fp-candle-tf-btn ${tf === activeTf ? "fp-candle-tf-active" : ""}`}
+              onClick={() => handleTfClick(tf)}
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                fontSize: 8,
+                fontWeight: 500,
+                fontFamily: "'Inter', sans-serif",
+                color: tf === activeTf ? colors.tfActive : colors.tfText,
+                lineHeight: "24px",
+              }}
+            >
+              {tf}
+            </button>
+          ))}
+          {/* Calendar icon */}
+          <span style={{ marginLeft: 2, opacity: 0.7 }}>
+            <CalendarIcon color={colors.tfText} size={10} />
+          </span>
+          {/* Vertical divider */}
+          <span
+            className="fp-candle-divider"
+            style={{
+              display: "inline-block",
+              width: 1,
+              height: 10,
+              borderLeft: `1px solid ${colors.divider}`,
+              marginLeft: 2,
+            }}
+          />
+        </div>
+
+        {/* UTC time (right) */}
+        <span className="fp-candle-utc" style={{ color: colors.utcText, fontSize: 8, fontWeight: 500 }}>
+          {utcTime}
+        </span>
       </div>
     </div>
   );
