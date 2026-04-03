@@ -2,7 +2,7 @@
 // Framework-agnostic plotting engine with matplotlib-like API.
 
 export { Figure, Axes, figure } from "./figure";
-export { renderChart, DEFAULT_COLORS, extractPieSlices, extractSurfaceSpec } from "./renderChart";
+export { renderChart, DEFAULT_COLORS, extractPieSlices, extractCandlestickData, extractSurfaceSpec } from "./renderChart";
 export type { ChartSpec, ChartType, SeriesSpec, PieSliceSpec, SurfaceSpec, HeatmapSpec, AxisSpec, LegendSpec } from "./renderChart";
 export { getTheme, registerTheme, listThemes, FLASH_DARK } from "./theme";
 export { computeTicks, computeLinearTicks, computeLogTicks, pickLabels, linearScale, logScale, scaleValue, generateTickMarks } from "./scales";

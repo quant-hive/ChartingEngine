@@ -646,6 +646,25 @@ export function extractPieSlices(spec: ChartSpec, palette: string[] = DEFAULT_CO
   };
 }
 
+export function extractCandlestickData(spec: ChartSpec) {
+  const s = (spec.series ?? [])[0];
+  if (!s) return null;
+  const open = s.open ?? [];
+  const high = s.high ?? [];
+  const low = s.low ?? [];
+  const close = s.close ?? s.data ?? [];
+  const n = Math.min(open.length, high.length, low.length, close.length);
+  if (n === 0) return null;
+  return {
+    open: open.slice(0, n),
+    high: high.slice(0, n),
+    low: low.slice(0, n),
+    close: close.slice(0, n),
+    labels: spec.xLabels,
+    ticker: s.label,
+  };
+}
+
 export function extractSurfaceSpec(spec: ChartSpec) {
   const surf = spec.surface;
   if (!surf) return null;

@@ -360,6 +360,8 @@ Returns the same JSON as the MCP `chart_render` tool. CORS enabled.
 
 ## Python Package (Colab/Jupyter)
 
+> **⚠️ IMPORTANT: The repository must be set to PUBLIC for `pip install` from GitHub to work. If you're testing charts in Colab/Jupyter notebooks, make sure the repo visibility is set to public first, otherwise the install command will fail with a 404 error.**
+
 ### Install
 
 ```bash

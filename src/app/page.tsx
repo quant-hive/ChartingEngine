@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useCallback } from "react";
-import { FlashChart, PieChart, Surface3D, renderChart } from "@/lib/plot";
+import { FlashChart, PieChart, Surface3D, CandlestickChart, renderChart, extractCandlestickData } from "@/lib/plot";
 import type { Scene } from "@/lib/plot";
 import { ChartSettingsDropdown, ChartHeader } from "@/lib/chartEngine";
 import type { ChartSettings } from "@/lib/chartEngine";
@@ -162,6 +162,22 @@ const EXAMPLES: Record<string, string> = {
     xLabels: ["Q1", "Q2", "Q3", "Q4"],
     grid: true,
   }, null, 2),
+
+  candlestick: JSON.stringify({
+    type: "candlestick",
+    title: "NIFTY 50",
+    subtitle: "4h · Last 12 candles",
+    series: [{
+      open: [7700, 7718, 7730, 7760, 7745, 7772, 7760, 7780, 7758, 7742, 7738, 7720],
+      high: [7722, 7740, 7762, 7768, 7775, 7778, 7785, 7782, 7760, 7748, 7740, 7725],
+      low: [7695, 7715, 7728, 7740, 7742, 7758, 7755, 7750, 7735, 7730, 7708, 7700],
+      close: [7718, 7732, 7758, 7745, 7770, 7762, 7780, 7755, 7740, 7735, 7715, 7710],
+      data: [7718, 7732, 7758, 7745, 7770, 7762, 7780, 7755, 7740, 7735, 7715, 7710],
+      label: "NIFTY 50",
+    }],
+    xLabels: ["09:15", "13:15", "09:15", "13:15", "09:15", "13:15", "09:15", "13:15", "09:15", "13:15", "09:15", "13:15"],
+    grid: true,
+  }, null, 2),
 };
 
 // ── Pie color defaults ──────────────────────────────────────────────────
@@ -171,11 +187,12 @@ const PIE_COLORS = ["#4aaaba", "#d8b4fe", "#fbbf24", "#f9a8d4", "#6dd5c8", "#a5f
 // ── Types ───────────────────────────────────────────────────────────────
 
 interface RenderResult {
-  componentHint: "FlashChart" | "PieChart" | "Surface3D";
+  componentHint: "FlashChart" | "PieChart" | "Surface3D" | "CandlestickChart";
   chartType: string;
   scene?: Scene;
   pieData?: { slices: { label: string; value: number; color: string }[]; donut: boolean; donutRatio: number };
   surfaceData?: { z: number[][]; x?: number[][]; y?: number[][]; wireframe: boolean };
+  candlestickData?: { open: number[]; high: number[]; low: number[]; close: number[]; labels?: string[]; ticker?: string };
   svg?: string;
   error?: string;
 }
@@ -232,6 +249,13 @@ export default function PlaygroundPage() {
             componentHint: "PieChart",
             chartType: type,
             pieData: { slices, donut: type === "donut", donutRatio: spec.donutRatio ?? 0.55 },
+          });
+        } else if (type === "candlestick" || type === "bokeh") {
+          const candleData = extractCandlestickData(spec);
+          setResult({
+            componentHint: "CandlestickChart",
+            chartType: type,
+            candlestickData: candleData ?? undefined,
           });
         } else if (type === "surface" || type === "surface_3d") {
           setResult({
@@ -402,6 +426,15 @@ export default function PlaygroundPage() {
                         lightTheme={chartSettings.theme === "light"}
                       />
                     </div>
+                  )}
+
+                  {result.componentHint === "CandlestickChart" && result.candlestickData && (
+                    <CandlestickChart
+                      data={result.candlestickData}
+                      grid={chartSettings.gridLines}
+                      showLegend={chartSettings.legend}
+                      theme={chartSettings.theme}
+                    />
                   )}
 
                   {result.componentHint === "Surface3D" && result.surfaceData && (

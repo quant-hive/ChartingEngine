@@ -14,7 +14,7 @@
 // Core (framework-agnostic)
 export {
   Figure, Axes, figure,
-  renderChart, DEFAULT_COLORS, extractPieSlices, extractSurfaceSpec,
+  renderChart, DEFAULT_COLORS, extractPieSlices, extractCandlestickData, extractSurfaceSpec,
   getTheme, registerTheme, listThemes, FLASH_DARK,
   computeTicks, computeLinearTicks, computeLogTicks, pickLabels, linearScale, logScale, scaleValue, generateTickMarks,
   computeLayout, computeSubplotBounds, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_PADDING, DEFAULT_INSET,
@@ -40,5 +40,5 @@ export type {
 } from "./core";
 
 // React renderer
-export { FlashChart, PieChart, Surface3D, useChartAnimation, shimmerFill } from "./react";
-export type { FlashChartProps, PieChartProps, PieSlice, Surface3DProps, SurfaceMode, AnimPhase } from "./react";
+export { FlashChart, PieChart, Surface3D, CandlestickChart, useChartAnimation, shimmerFill } from "./react";
+export type { FlashChartProps, PieChartProps, PieSlice, Surface3DProps, SurfaceMode, CandlestickChartProps, CandlestickData, AnimPhase } from "./react";

@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { fetchGraphData, type GraphApiResponse } from "./graphApi";
-import { FlashChart, renderChart, type ChartSpec, PieChart, extractPieSlices, Surface3D, type SurfaceMode } from "./plot";
+import { FlashChart, renderChart, type ChartSpec, PieChart, extractPieSlices, Surface3D, type SurfaceMode, CandlestickChart, extractCandlestickData } from "./plot";
 import { FLASH_DARK } from "./plot/core";
 
 // ── Chart Types (backward compat) ────────────────────────────────────────
@@ -512,16 +512,16 @@ const MOCK_CHART_SPECS: Record<string, ChartSpec> = {
   },
   candlestick: {
     type: "candlestick",
-    title: "AAPL Price Action",
-    subtitle: "Last 10 trading days",
-    xLabels: ["Mar 17", "Mar 18", "Mar 19", "Mar 20", "Mar 21", "Mar 24", "Mar 25", "Mar 26", "Mar 27", "Mar 28"],
+    title: "NIFTY 50",
+    subtitle: "4h · Last 12 candles",
+    xLabels: ["09:15", "13:15", "09:15", "13:15", "09:15", "13:15", "09:15", "13:15", "09:15", "13:15", "09:15", "13:15"],
     series: [{
-      data: [172, 175, 173, 178, 176, 180, 182, 179, 184, 186],
-      open: [170, 172, 176, 173, 178, 175, 180, 183, 179, 183],
-      high: [174, 177, 177, 179, 179, 181, 184, 184, 185, 188],
-      low: [168, 171, 172, 172, 175, 174, 179, 178, 178, 182],
-      close: [172, 175, 173, 178, 176, 180, 182, 179, 184, 186],
-      label: "AAPL",
+      data: [7718, 7732, 7758, 7745, 7770, 7762, 7780, 7755, 7740, 7735, 7715, 7710],
+      open: [7700, 7718, 7730, 7760, 7745, 7772, 7760, 7780, 7758, 7742, 7738, 7720],
+      high: [7722, 7740, 7762, 7768, 7775, 7778, 7785, 7782, 7760, 7748, 7740, 7725],
+      low: [7695, 7715, 7728, 7740, 7742, 7758, 7755, 7750, 7735, 7730, 7708, 7700],
+      close: [7718, 7732, 7758, 7745, 7770, 7762, 7780, 7755, 7740, 7735, 7715, 7710],
+      label: "NIFTY 50",
     }],
   },
   bokeh: {
@@ -800,6 +800,18 @@ export function ChartCell({ chartTypeInput }: { chartTypeInput: string }) {
         </div>
       </div>
     );
+  } else if (spec.type === "candlestick" || spec.type === "bokeh") {
+    const candleData = extractCandlestickData(spec);
+    if (candleData) {
+      chartBody = (
+        <CandlestickChart
+          data={candleData}
+          grid={chartSettings.gridLines}
+          showLegend={chartSettings.legend}
+          theme={chartSettings.theme}
+        />
+      );
+    }
   } else if (spec.type === "heatmap") {
     const fallbackSpec: ChartSpec = {
       type: "line",
