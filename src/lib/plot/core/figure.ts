@@ -274,8 +274,9 @@ export class Axes {
           hasStackedBars = true;
           // For stacked bars, the top of each bar is bottom[i] + yData[i]
           for (let j = 0; j < cmd.yData.length; j++) {
-            const top = (cmd.opts.bottom[j] ?? 0) + cmd.yData[j];
-            yMin = Math.min(yMin, cmd.yData[j]);
+            const bot = cmd.opts.bottom[j] ?? 0;
+            const top = bot + cmd.yData[j];
+            yMin = Math.min(yMin, bot);
             yMax = Math.max(yMax, top);
           }
         } else {
@@ -306,8 +307,8 @@ export class Axes {
       }
     }
 
-    // Bar charts should include 0 in y range
-    if (hasBarCmd) {
+    // Bar charts should include 0 in y range (but not stacked/candlestick bars with bottom offsets)
+    if (hasBarCmd && !hasStackedBars) {
       yMin = Math.min(yMin, 0);
     }
 

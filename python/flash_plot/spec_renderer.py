@@ -232,7 +232,7 @@ def _render_pie(ax, spec: dict, chart_type: str):
 
 
 def _render_candlestick(ax, series: list, x_labels: list):
-    """Render candlestick as bars."""
+    """Render candlestick as bars with correct OHLC positioning."""
     if not series:
         return
     s = series[0]
@@ -242,12 +242,16 @@ def _render_candlestick(ax, series: list, x_labels: list):
     closes = s.get("close", [])
     n = len(opens)
     for i in range(n):
-        ax.plot([lows[i], highs[i]], x=[i, i], color="#707070", line_width=0.8)
-        color = "#4ECDC4" if closes[i] >= opens[i] else "#FF6B6B"
+        is_bull = closes[i] >= opens[i]
+        color = "#4ECDC4" if is_bull else "#FF6B6B"
         body_low = min(opens[i], closes[i])
         body_high = max(opens[i], closes[i])
+        body_h = body_high - body_low or 0.001
         lbl = x_labels[i] if i < len(x_labels) else str(i)
-        ax.bar([lbl], [body_high - body_low], color=color)
+        # Wick (thin bar from low to high)
+        ax.bar([lbl], [highs[i] - lows[i]], color="#707070", width=2, bottom=[lows[i]])
+        # Body (wide bar from body_low to body_high)
+        ax.bar([lbl], [body_h], color=color, width=14, bottom=[body_low])
     if x_labels:
         ax.set_xticks(x_labels)
 

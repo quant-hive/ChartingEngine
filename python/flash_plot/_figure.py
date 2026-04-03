@@ -529,6 +529,7 @@ class Axes:
         # Data bounds
         x_lo, x_hi, y_lo, y_hi = float("inf"), float("-inf"), float("inf"), float("-inf")
         has_bar = False
+        has_stacked_bars = False
         bar_series_count = 0
 
         for idx, cmd in enumerate(self._commands):
@@ -542,7 +543,9 @@ class Axes:
                     x_lo, x_hi = min(x_lo, 0), max(x_hi, len(cmd.y_data) - 1)
             elif isinstance(cmd, _BarCmd):
                 has_bar = True
-                if not cmd.opts.get("bottom"):
+                if cmd.opts.get("bottom"):
+                    has_stacked_bars = True
+                else:
                     bar_series_count += 1
                 bot_vals = cmd.opts.get("bottom")
                 for i, v in enumerate(cmd.y_data):
@@ -592,7 +595,7 @@ class Axes:
                 if y_lo == float("inf"):
                     y_lo, y_hi = 0, 1
 
-        if has_bar:
+        if has_bar and not has_stacked_bars:
             y_lo = min(y_lo, 0)
 
         if self._xlim:
