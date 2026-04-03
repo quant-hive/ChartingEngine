@@ -143,7 +143,7 @@ function CalIcon({ c = "#707073", s = 11 }: { c?: string; s?: number }) {
 
 export default function CandlestickChart({
   data,
-  width: containerW = 595,
+  width: propW,
   height: containerH = 260,
   grid = true,
   showLegend = true,
@@ -152,12 +152,25 @@ export default function CandlestickChart({
   activeTimeframe: propTf,
   onTimeframeChange,
 }: CandlestickChartProps) {
+  const wrapRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   const [hovered, setHovered] = useState<number | null>(null);
   const [intTf, setIntTf] = useState("1m");
   const [utc, setUtc] = useState(utcStr);
   const [zoom, setZoom] = useState(1);
+  const [measuredW, setMeasuredW] = useState(0);
+
+  // ── Measure container width ─────────────────────────────────────
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setMeasuredW(e.contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const containerW = propW ?? (measuredW > 0 ? measuredW : 800);
 
   const tf = propTf ?? intTf;
   const { open, high, low, close, labels, ticker, interval } = data;
@@ -168,7 +181,7 @@ export default function CandlestickChart({
 
   // ── Intersection observer ─────────────────────────────────────────
   useEffect(() => {
-    const el = scrollRef.current;
+    const el = wrapRef.current;
     if (!el) return;
     const obs = new IntersectionObserver(([e]) => { if (e.isIntersecting) { setVisible(true); obs.disconnect(); } }, { threshold: 0.1 });
     obs.observe(el);
@@ -262,11 +275,11 @@ export default function CandlestickChart({
 
   return (
     <div
+      ref={wrapRef}
       className={themeClass}
       style={{
         position: "relative",
         width: "100%",
-        maxWidth: containerW,
         fontFamily: "'Inter', sans-serif",
         background: C.bg,
         borderRadius: 4,
