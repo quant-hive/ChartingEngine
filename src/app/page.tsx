@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useState, useCallback } from "react";
-import { FlashChart, PieChart, Surface3D, CandlestickChart, renderChart, extractCandlestickData } from "@/lib/plot";
-import type { Scene } from "@/lib/plot";
+import { FlashChart, PieChart, Surface3D, CandlestickChart, renderChart, extractCandlestickData, validateChartSpec } from "@/lib/plot";
+import type { Scene, ValidationError } from "@/lib/plot";
 import { ChartSettingsDropdown, ChartHeader } from "@/lib/chartEngine";
 import type { ChartSettings } from "@/lib/chartEngine";
 
@@ -205,6 +205,7 @@ export default function PlaygroundPage() {
   const [specText, setSpecText] = useState(EXAMPLES.bar);
   const [result, setResult] = useState<RenderResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [validationErrors, setValidationErrors] = useState<ValidationError[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<RenderMode>("local");
   const [activeExample, setActiveExample] = useState("bar");
@@ -214,13 +215,21 @@ export default function PlaygroundPage() {
 
   const handleRender = useCallback(async () => {
     setError(null);
+    setValidationErrors(null);
     setResult(null);
     setLoading(true);
 
     try {
       const rawSpec = JSON.parse(specText);
+
+      const validation = validateChartSpec(rawSpec);
+      if (!validation.ok) {
+        setValidationErrors(validation.errors);
+        return;
+      }
+
       const spec = {
-        ...rawSpec,
+        ...validation.spec,
         title: undefined,
         subtitle: undefined,
         grid: chartSettings.gridLines,
@@ -234,6 +243,7 @@ export default function PlaygroundPage() {
           body: JSON.stringify({ spec }),
         });
         const data = await res.json();
+        if (data.details) { setValidationErrors(data.details); return; }
         if (data.error) throw new Error(data.error);
         setResult(data);
       } else {
@@ -391,7 +401,24 @@ export default function PlaygroundPage() {
               </div>
             )}
 
-            {!result && !error && (
+            {validationErrors && (
+              <div className="bg-[#1a1a2a] border border-[#ff8844] rounded-lg px-6 py-4 max-w-[540px] w-full">
+                <p className="text-[#ffaa66] text-[13px] font-medium mb-3">
+                  Validation failed — {validationErrors.length} error{validationErrors.length !== 1 ? "s" : ""}
+                </p>
+                <ul className="space-y-2">
+                  {validationErrors.map((e, i) => (
+                    <li key={i} className="text-[12px]">
+                      <code className="text-[#ffd93d]">{e.path || "root"}</code>
+                      <span className="text-[#cc8855] mx-1">—</span>
+                      <span className="text-[#ffccaa]">{e.message}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {!result && !error && !validationErrors && (
               <div className="text-[#333] text-[14px]">
                 Select a chart type above and click Render
               </div>

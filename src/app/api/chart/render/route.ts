@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { executeChartRender } from "@/mcp/tools/chartRender";
-import type { ChartSpec } from "@/lib/plot/core/renderChart";
+import { validateChartSpec } from "@/lib/plot";
 
 // ── CORS headers ────────────────────────────────────────────────────────
 
@@ -15,7 +15,8 @@ export async function OPTIONS() {
 }
 
 // ── POST /api/chart/render ──────────────────────────────────────────────
-// Accepts a ChartSpec JSON body. Returns Scene JSON (or SVG).
+// Accepts a ChartSpec JSON body. Validates before rendering.
+// Returns Scene JSON (or SVG) on success.
 //
 // Example body:
 // {
@@ -31,21 +32,27 @@ export async function OPTIONS() {
 //   "format": "scene"
 // }
 //
-// Response:
-// {
-//   "componentHint": "FlashChart",
-//   "chartType": "line",
-//   "scene": { ... }
-// }
+// Success response (200):
+// { "componentHint": "FlashChart", "chartType": "line", "scene": { ... } }
+//
+// Validation error response (422):
+// { "error": "Invalid ChartSpec", "details": [{ "path": "series[0].data", "message": "..." }] }
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const spec: ChartSpec = body.spec ?? body;
+    const raw = body.spec ?? body;
     const format: "scene" | "svg" = body.format ?? "scene";
 
-    const result = executeChartRender(spec, format);
+    const validation = validateChartSpec(raw);
+    if (!validation.ok) {
+      return NextResponse.json(
+        { error: "Invalid ChartSpec", details: validation.errors },
+        { status: 422, headers: CORS }
+      );
+    }
 
+    const result = executeChartRender(validation.spec, format);
     return NextResponse.json(result, { headers: CORS });
   } catch (err: any) {
     return NextResponse.json(

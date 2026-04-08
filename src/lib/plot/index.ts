@@ -39,6 +39,10 @@ export type {
   FigureConfig,
 } from "./core";
 
+// Validator
+export { validateChartSpec, ChartSpecSchema, HEX_COLOR_REGEX, CHART_TYPES } from "./core";
+export type { ValidationResult, ValidationError } from "./core";
+
 // React renderer
 export { FlashChart, PieChart, Surface3D, CandlestickChart, useChartAnimation, shimmerFill } from "./react";
 export type { FlashChartProps, PieChartProps, PieSlice, Surface3DProps, SurfaceMode, CandlestickChartProps, CandlestickData, AnimPhase } from "./react";
