@@ -8,7 +8,7 @@
  * fill bottom→top) · zoom (ctrl+wheel) · smooth hidden-scrollbar scroll.
  */
 
-import React, { useRef, useState, useEffect, useMemo, useCallback } from "react";
+import React, { useRef, useState, useEffect, useLayoutEffect, useMemo, useCallback } from "react";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -163,8 +163,10 @@ export default function CandlestickChart({
   formingIndex,
   defaultChartType = "candle",
 }: CandlestickChartProps) {
-  const wrapRef   = useRef<HTMLDivElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const wrapRef      = useRef<HTMLDivElement>(null);
+  const scrollRef    = useRef<HTMLDivElement>(null);
+  const touchDistRef = useRef<number>(0);
+  const touchXRef    = useRef<number>(0);
 
   const [visible,    setVisible]    = useState(false);
   const [hovered,    setHovered]    = useState<number | null>(null);
@@ -178,13 +180,19 @@ export default function CandlestickChart({
     () => new Set(indicators.map(m => `${m.type}${m.period}`))
   );
 
-  // ── Measure width ──────────────────────────────────────────────────────────
+  // ── Measure width — sync on first paint, then track resizes ──────────────
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    if (el) setMeasuredW(el.getBoundingClientRect().width);
+  }, []);
   useEffect(() => {
     const el = wrapRef.current; if (!el) return;
     const ro = new ResizeObserver(([e]) => setMeasuredW(e.contentRect.width));
     ro.observe(el); return () => ro.disconnect();
   }, []);
-  const containerW = propW ?? (measuredW > 0 ? measuredW : 800);
+  const containerW = propW ?? (measuredW > 0 ? measuredW : 0);
+  // Don't render chart content until width is known
+  if (containerW === 0) return <div ref={wrapRef} style={{ width:"100%", height: containerH }} />;
 
   // ── Intersection observer ──────────────────────────────────────────────────
   useEffect(() => {
@@ -205,10 +213,11 @@ export default function CandlestickChart({
   const isLight = theme === "light";
   const isNaked = theme === "naked";
 
-  // ── Layout ─────────────────────────────────────────────────────────────────
+  // ── Layout — responsive to container width ────────────────────────────────
   const VOL_H    = 56;
-  const Y_AXIS_W = 72;
-  const PAD      = { top: 8, bottom: 22, left: 10 };
+  const Y_AXIS_W = containerW < 360 ? 58 : containerW < 520 ? 64 : 72;
+  const yFontSz  = containerW < 360 ? 10 : containerW < 520 ? 11 : 12;
+  const PAD      = { top: 8, bottom: containerW < 400 ? 18 : 22, left: 8 };
   const hasVol   = showVolume && !!volume && volume.length >= n;
   const mainH    = containerH - (hasVol ? VOL_H + 6 : 0);
   const plotH    = mainH - PAD.top - PAD.bottom;
@@ -305,6 +314,37 @@ export default function CandlestickChart({
     setActiveInds(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s; });
   }, []);
 
+  // ── Touch handlers (pinch-to-zoom + swipe-to-scroll) ──────────────────────
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      touchDistRef.current = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+    } else {
+      touchXRef.current = e.touches[0].clientX;
+    }
+  }, []);
+
+  const onTouchMove = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      if (touchDistRef.current > 0) {
+        const scale = dist / touchDistRef.current;
+        setZoom(z => Math.min(4, Math.max(0.3, z * scale)));
+      }
+      touchDistRef.current = dist;
+    } else if (e.touches.length === 1 && scrollRef.current) {
+      const dx = touchXRef.current - e.touches[0].clientX;
+      scrollRef.current.scrollLeft += dx;
+      touchXRef.current = e.touches[0].clientX;
+    }
+  }, []);
+
   // ── Scroll to end ──────────────────────────────────────────────────────────
   useEffect(() => {
     const el = scrollRef.current;
@@ -338,6 +378,7 @@ export default function CandlestickChart({
 
         {/* Scrollable SVG */}
         <div ref={scrollRef} className="fp-candle-scroll" onWheel={onWheel}
+          onTouchStart={onTouchStart} onTouchMove={onTouchMove}
           style={{ flex:1, overflowX:"auto", overflowY:"hidden", scrollBehavior:"smooth", position:"relative" }}
         >
           <svg width={innerW} height={containerH}
@@ -613,7 +654,7 @@ export default function CandlestickChart({
               const y = scaleY(p);
               if (y < PAD.top - 6 || y > PAD.top + plotH + 6) return null;
               return (
-                <text key={`yt${i}`} x={8} y={y+4} fontSize={12}
+                <text key={`yt${i}`} x={6} y={y+4} fontSize={yFontSz}
                   fontFamily="var(--font-instrument-serif),'Instrument Serif',serif"
                   fill={C.yLbl}
                   style={visible?{animation:`fp-cLblY 0.35s ease ${(0.45+i*0.03).toFixed(2)}s both`} as React.CSSProperties:{opacity:0}}
@@ -627,7 +668,7 @@ export default function CandlestickChart({
               return (
                 <g>
                   <rect x={1} y={crosshair.y-9} width={Y_AXIS_W-2} height={18} fill={C.crossBg} rx={2}/>
-                  <text x={Y_AXIS_W/2} y={crosshair.y+4.5} textAnchor="middle" fontSize={10} fontWeight={600}
+                  <text x={Y_AXIS_W/2} y={crosshair.y+4.5} textAnchor="middle" fontSize={yFontSz - 1} fontWeight={600}
                     fontFamily="var(--font-instrument-serif),'Instrument Serif',serif" fill={C.crossTxt}
                   >{fmt(price)}</text>
                 </g>
@@ -643,8 +684,8 @@ export default function CandlestickChart({
                 if (b.y < PAD.top-10 || b.y > PAD.top+plotH+10) return null;
                 return (
                   <g key={i} style={visible?{animation:"fp-cFade 0.5s ease 1.5s both"} as React.CSSProperties:{opacity:0}}>
-                    <rect x={2} y={b.y-10} width={62} height={20} fill={col} rx={2}/>
-                    <text x={6} y={b.y+4} fontSize={12}
+                    <rect x={2} y={b.y-10} width={Y_AXIS_W-4} height={20} fill={col} rx={2}/>
+                    <text x={6} y={b.y+4} fontSize={yFontSz}
                       fontFamily="var(--font-instrument-serif),'Instrument Serif',serif"
                       fill="#fff" fontWeight={400}
                     >{fmt(b.price)}</text>
@@ -656,47 +697,50 @@ export default function CandlestickChart({
         </div>
       </div>
 
-      {/* Bottom bar */}
+      {/* Bottom bar — collapses gracefully on small screens */}
       <div style={{
         display:"flex", alignItems:"center", justifyContent:"space-between",
-        padding:"5px 10px 7px",
+        padding: containerW < 400 ? "4px 8px 6px" : "5px 10px 7px",
         opacity: visible ? 1 : 0, transition:"opacity 0.5s ease 1.2s",
+        flexWrap: "wrap", gap: 4,
       }}>
-        <div style={{ display:"flex", alignItems:"center", gap:5, flexWrap:"wrap" }}>
-          {/* Timeframes */}
-          {timeframes.map(t => (
+        <div style={{ display:"flex", alignItems:"center", gap: containerW < 400 ? 3 : 5, flexWrap:"wrap" }}>
+          {/* Timeframes — hide on very small screens */}
+          {containerW >= 320 && timeframes.map(t => (
             <button key={t} onClick={() => onTimeframeChange ? onTimeframeChange(t) : setIntTf(t)} style={{
-              background:"none", border:"none", padding:"1px 3px", cursor:"pointer",
-              fontSize:10, fontWeight:500, fontFamily:"'Inter',sans-serif",
+              background:"none", border:"none", padding:"1px 2px", cursor:"pointer",
+              fontSize: containerW < 400 ? 9 : 10, fontWeight:500, fontFamily:"'Inter',sans-serif",
               color: t===tf ? C.tfAct : C.tfTxt, transition:"color 0.2s ease",
             }}>{t}</button>
           ))}
-          <CalIcon c={C.tfTxt} s={12}/>
-          <span style={{width:1,height:12,borderLeft:`1px solid ${C.div}`,display:"inline-block",margin:"0 3px"}}/>
+          {containerW >= 360 && <CalIcon c={C.tfTxt} s={11}/>}
+          <span style={{width:1,height:11,borderLeft:`1px solid ${C.div}`,display:"inline-block",margin:"0 2px"}}/>
           {/* Chart type */}
           {(["candle","line","area"] as const).map(ct => (
             <button key={ct} onClick={() => setChartType(ct)} style={{
               background: chartType===ct ? C.btnActBg : "none",
-              border:"none", padding:"1px 6px", cursor:"pointer", borderRadius:3,
-              fontSize:10, fontWeight:500, fontFamily:"'Inter',sans-serif",
+              border:"none", padding:"1px 5px", cursor:"pointer", borderRadius:3,
+              fontSize: containerW < 400 ? 9 : 10, fontWeight:500, fontFamily:"'Inter',sans-serif",
               color: chartType===ct ? C.btnActTxt : C.tfTxt,
               transition:"background 0.15s ease, color 0.15s ease",
             }}>{ct[0].toUpperCase()+ct.slice(1)}</button>
           ))}
-          <span style={{width:1,height:12,borderLeft:`1px solid ${C.div}`,display:"inline-block",margin:"0 3px"}}/>
-          {/* MA toggles */}
-          {maLines.map(m => (
-            <button key={m.key} onClick={() => toggleInd(m.key)} style={{
-              border:`1px solid ${activeInds.has(m.key) ? (m.color??C.div) : C.div}`,
-              background: activeInds.has(m.key) ? `${m.color??"#888"}22` : "none",
-              padding:"0 5px", borderRadius:3, cursor:"pointer",
-              fontSize:9, fontWeight:500, fontFamily:"'Inter',sans-serif",
-              color: activeInds.has(m.key) ? (m.color??C.tfTxt) : C.tfTxt,
-              transition:"all 0.15s ease",
-            }}>{m.type} {m.period}</button>
-          ))}
+          {/* MA toggles — hide on very small screens */}
+          {containerW >= 480 && <>
+            <span style={{width:1,height:11,borderLeft:`1px solid ${C.div}`,display:"inline-block",margin:"0 2px"}}/>
+            {maLines.map(m => (
+              <button key={m.key} onClick={() => toggleInd(m.key)} style={{
+                border:`1px solid ${activeInds.has(m.key) ? (m.color??C.div) : C.div}`,
+                background: activeInds.has(m.key) ? `${m.color??"#888"}22` : "none",
+                padding:"0 4px", borderRadius:3, cursor:"pointer",
+                fontSize:9, fontWeight:500, fontFamily:"'Inter',sans-serif",
+                color: activeInds.has(m.key) ? (m.color??C.tfTxt) : C.tfTxt,
+                transition:"all 0.15s ease",
+              }}>{m.type} {m.period}</button>
+            ))}
+          </>}
         </div>
-        <span style={{color:C.utcTxt,fontSize:10,fontWeight:500}}>{utc}</span>
+        {containerW >= 280 && <span style={{color:C.utcTxt, fontSize: containerW < 400 ? 9 : 10, fontWeight:500}}>{utc}</span>}
       </div>
     </div>
   );
