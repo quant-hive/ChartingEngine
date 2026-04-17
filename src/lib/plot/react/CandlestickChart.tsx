@@ -231,11 +231,12 @@ export default function CandlestickChart({
   const chartW   = containerW - Y_AXIS_W;
 
   // ── Candle geometry — visibleCount drives zoom (like TradingView) ───────────
-  // Default: fit all candles, min 3 visible, max n visible
-  const vc = Math.max(3, Math.min(n, visibleCount ?? n));
+  // Default: show up to 40 candles so the chart starts zoomed out
+  const DEFAULT_VISIBLE = Math.min(n, 40);
+  const vc = Math.max(3, Math.min(n, visibleCount ?? DEFAULT_VISIBLE));
   // Space each candle evenly across chartW
   const cSpacing = chartW / vc;
-  const cW       = Math.max(2, Math.min(cSpacing * 0.6, 40));
+  const cW       = Math.max(2, Math.min(cSpacing * 0.5, 14));
   // Total SVG width: always exactly chartW (we pan by scrolling, not by innerW)
   const innerW   = Math.max(chartW, n * cSpacing + PAD.left * 2);
 
