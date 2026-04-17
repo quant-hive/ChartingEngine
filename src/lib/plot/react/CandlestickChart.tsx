@@ -495,7 +495,7 @@ export default function CandlestickChart({
 
             {/* X labels */}
             {labels && labels.slice(0, n).map((lbl, i) => {
-              const step = Math.max(1, Math.ceil(n / Math.max(3, Math.floor(innerW / (60 * zoom)))));
+              const step = Math.max(1, Math.ceil(n / Math.max(3, Math.floor(chartW / 60))));
               if (i % step !== 0 && i !== n - 1) return null;
               return (
                 <text key={`x${i}`} x={scaleX(i)} y={PAD.top+plotH+15} textAnchor="middle" fontSize={9} fontWeight={500} fill={C.xLbl}
@@ -565,7 +565,7 @@ export default function CandlestickChart({
                 const bTY  = scaleY(bTop), bBY = scaleY(bBot);
                 const bH   = Math.max(1, bBY - bTY);
                 const wH   = Math.max(0.5, wBY - wTY);
-                const wW   = Math.max(1, 1.2 * zoom);
+                const wW   = Math.max(1, Math.min(2, cW * 0.15));
                 const id   = `c${i}`;
                 const midY = bTY + bH / 2;
                 const origin    = `${cx.toFixed(1)}px ${midY.toFixed(1)}px`;
