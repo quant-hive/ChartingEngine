@@ -118,9 +118,7 @@ function utcStr(): string {
 }
 
 function calcSMA(data: number[], period: number): (number | undefined)[] {
-  // Use available data window, minimum 2 points, so line always spans full chart
   return data.map((_, i) => {
-    if (i < 2) return undefined;
     const window = data.slice(Math.max(0, i - period + 1), i + 1);
     return window.reduce((a, b) => a + b, 0) / window.length;
   });
@@ -134,8 +132,7 @@ function calcEMA(data: number[], period: number): (number | undefined)[] {
   let ema = data[0];
   for (let i = 0; i < data.length; i++) {
     ema = i === 0 ? data[0] : data[i] * k + ema * (1 - k);
-    // Only emit once we have enough data for the line to be meaningful
-    result.push(i < Math.min(period - 1, 2) ? undefined : ema);
+    result.push(ema);
   }
   return result;
 }
