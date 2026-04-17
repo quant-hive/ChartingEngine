@@ -191,8 +191,7 @@ export default function CandlestickChart({
     ro.observe(el); return () => ro.disconnect();
   }, []);
   const containerW = propW ?? (measuredW > 0 ? measuredW : 0);
-  // Don't render chart content until width is known
-  if (containerW === 0) return <div ref={wrapRef} style={{ width:"100%", height: containerH }} />;
+  const ready = containerW > 0;
 
   // ── Intersection observer ──────────────────────────────────────────────────
   useEffect(() => {
@@ -355,9 +354,10 @@ export default function CandlestickChart({
   return (
     <div ref={wrapRef} className={isLight ? "fp-candle-light" : ""} style={{
       position:"relative", width:"100%", fontFamily:"'Inter',sans-serif",
-      background: C.bg, borderRadius: 4, overflow:"hidden",
+      background: ready ? C.bg : "transparent", borderRadius: 4, overflow:"hidden",
+      minHeight: ready ? undefined : containerH,
     }}>
-      <style>{CANDLE_CSS}</style>
+      {!ready ? null : <><style>{CANDLE_CSS}</style>
 
       {/* OHLC pill — negative margin pulls it beside the external ChartHeader title */}
       <div style={{
@@ -742,6 +742,7 @@ export default function CandlestickChart({
         </div>
         {containerW >= 280 && <span style={{color:C.utcTxt, fontSize: containerW < 400 ? 9 : 10, fontWeight:500}}>{utc}</span>}
       </div>
+    </>}
     </div>
   );
 }
