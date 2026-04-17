@@ -126,11 +126,15 @@ function calcSMA(data: number[], period: number): (number | undefined)[] {
 
 function calcEMA(data: number[], period: number): (number | undefined)[] {
   const k = 2 / (period + 1);
-  const result: (number | undefined)[] = new Array(data.length).fill(undefined);
-  if (data.length < period) return result;
-  let ema = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  result[period - 1] = ema;
-  for (let i = period; i < data.length; i++) { ema = data[i] * k + ema * (1 - k); result[i] = ema; }
+  const result: (number | undefined)[] = [];
+  if (data.length === 0) return result;
+  // Seed from first value so the line spans the full chart
+  let ema = data[0];
+  for (let i = 0; i < data.length; i++) {
+    ema = i === 0 ? data[0] : data[i] * k + ema * (1 - k);
+    // Only emit once we have enough data for the line to be meaningful
+    result.push(i < Math.min(period - 1, 2) ? undefined : ema);
+  }
   return result;
 }
 
