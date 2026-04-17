@@ -410,11 +410,14 @@ export default function CandlestickChart({
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
   }, [priceRange, plotH]);
 
-  // ── Scroll to end ──────────────────────────────────────────────────────────
+  // ── Scroll to end — instant (no smooth) so zoom never hides right candles ──
   useEffect(() => {
     const el = scrollRef.current;
-    if (el && innerW > chartW) el.scrollLeft = el.scrollWidth;
-  }, [innerW, chartW, visible, formingIndex]);
+    if (!el) return;
+    // Temporarily disable smooth scroll so the jump is instant
+    el.style.scrollBehavior = "auto";
+    el.scrollLeft = el.scrollWidth;
+  }, [innerW, chartW, visible, formingIndex, visibleCount]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -445,7 +448,7 @@ export default function CandlestickChart({
         {/* Scrollable SVG */}
         <div ref={scrollRef} className="fp-candle-scroll" onWheel={onWheel}
           onTouchStart={onTouchStart} onTouchMove={onTouchMove}
-          style={{ flex:1, overflowX:"auto", overflowY:"hidden", scrollBehavior:"smooth", position:"relative" }}
+          style={{ flex:1, overflowX:"auto", overflowY:"hidden", position:"relative" }}
         >
           <svg width={innerW} height={containerH}
             style={{ display:"block", fontFamily:"'Inter',sans-serif" }}
