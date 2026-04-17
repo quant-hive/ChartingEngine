@@ -118,9 +118,11 @@ function utcStr(): string {
 }
 
 function calcSMA(data: number[], period: number): (number | undefined)[] {
+  // Use available data window, minimum 2 points, so line always spans full chart
   return data.map((_, i) => {
-    if (i < period - 1) return undefined;
-    return data.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period;
+    if (i < 2) return undefined;
+    const window = data.slice(Math.max(0, i - period + 1), i + 1);
+    return window.reduce((a, b) => a + b, 0) / window.length;
   });
 }
 
