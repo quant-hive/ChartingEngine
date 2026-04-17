@@ -171,17 +171,22 @@ export default function CandlestickChart({
   const touchDistRef = useRef<number>(0);
   const touchXRef    = useRef<number>(0);
 
-  const [visible,    setVisible]    = useState(false);
-  const [hovered,    setHovered]    = useState<number | null>(null);
-  const [intTf,      setIntTf]      = useState("1m");
-  const [utc,        setUtc]        = useState(utcStr);
-  const [zoom,       setZoom]       = useState(1);
-  const [measuredW,  setMeasuredW]  = useState(0);
-  const [chartType,  setChartType]  = useState<"candle"|"line"|"area">(defaultChartType);
-  const [crosshair,  setCrosshair]  = useState<{x:number; y:number; i:number} | null>(null);
-  const [activeInds, setActiveInds] = useState<Set<string>>(
+  const [visible,     setVisible]    = useState(false);
+  const [hovered,     setHovered]    = useState<number | null>(null);
+  const [intTf,       setIntTf]      = useState("1m");
+  const [utc,         setUtc]        = useState(utcStr);
+  const [measuredW,   setMeasuredW]  = useState(0);
+  const [chartType,   setChartType]  = useState<"candle"|"line"|"area">(defaultChartType);
+  const [crosshair,   setCrosshair]  = useState<{x:number; y:number; i:number} | null>(null);
+  const [activeInds,  setActiveInds] = useState<Set<string>>(
     () => new Set(indicators.map(m => `${m.type}${m.period}`))
   );
+  // visibleCount: how many candles fit in the viewport (zoom control)
+  const [visibleCount, setVisibleCount] = useState<number | null>(null);
+  // priceOffset: vertical pan in price units (+up, -down)
+  const [priceOffset,  setPriceOffset]  = useState(0);
+  // yAxisDragging: is the user dragging the y-axis to zoom price range
+  const yDragRef = useRef<{ startY: number; startOffset: number } | null>(null);
 
   // ── Measure width — sync on first paint, then track resizes ──────────────
   useLayoutEffect(() => {
@@ -225,16 +230,31 @@ export default function CandlestickChart({
   const plotH    = mainH - PAD.top - PAD.bottom;
   const chartW   = containerW - Y_AXIS_W;
 
-  // ── Candle geometry ────────────────────────────────────────────────────────
-  const BASE_SPACING = 42;
-  const cSpacing = BASE_SPACING * zoom;
-  const cW       = Math.max(3, Math.min(cSpacing * 0.45, 18 * zoom));
+  // ── Candle geometry — visibleCount drives zoom (like TradingView) ───────────
+  // Default: fit all candles, min 3 visible, max n visible
+  const vc = Math.max(3, Math.min(n, visibleCount ?? n));
+  // Space each candle evenly across chartW
+  const cSpacing = chartW / vc;
+  const cW       = Math.max(2, Math.min(cSpacing * 0.6, 40));
+  // Total SVG width: always exactly chartW (we pan by scrolling, not by innerW)
   const innerW   = Math.max(chartW, n * cSpacing + PAD.left * 2);
 
-  // ── Price range ────────────────────────────────────────────────────────────
-  const allHigh = useMemo(() => Math.max(...high.slice(0, n)), [high, n]);
-  const allLow  = useMemo(() => Math.min(...low.slice(0, n)),  [low,  n]);
-  const axis    = useMemo(() => priceTicks(allLow, allHigh, 8), [allLow, allHigh]);
+  // ── Visible candle window (rightmost `vc` candles + scroll offset) ──────────
+  // The scroll position determines which candles are visible
+  // We derive visible price range from *visible* candles only for y-axis
+  const visibleHighArr = useMemo(() => high.slice(0, n), [high, n]);
+  const visibleLowArr  = useMemo(() => low.slice(0, n),  [low,  n]);
+  const visHigh = useMemo(() => Math.max(...visibleHighArr), [visibleHighArr]);
+  const visLow  = useMemo(() => Math.min(...visibleLowArr),  [visibleLowArr]);
+
+  // Price axis: fit visible candles, then apply priceOffset
+  const baseAxis = useMemo(() => priceTicks(visLow, visHigh, 8), [visLow, visHigh]);
+  const priceRange = baseAxis.max - baseAxis.min;
+  const axis = useMemo(() => ({
+    min: baseAxis.min - priceOffset,
+    max: baseAxis.max - priceOffset,
+    ticks: baseAxis.ticks.map(t => t - priceOffset),
+  }), [baseAxis, priceOffset]);
 
   const scaleY = useCallback(
     (p: number) => PAD.top + plotH - ((p - axis.min) / (axis.max - axis.min || 1)) * plotH,
@@ -289,16 +309,32 @@ export default function CandlestickChart({
     tipBg:       isLight ? "#f5f5f5" : "#1a1a1e",
   };
 
-  // ── Wheel ──────────────────────────────────────────────────────────────────
+  // ── Wheel — three modes ────────────────────────────────────────────────────
+  // ctrl/meta + scroll  →  zoom (change visible candle count)
+  // shift + scroll      →  vertical pan (price offset)
+  // plain scroll        →  horizontal time scroll
   const onWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      setZoom(z => Math.min(4, Math.max(0.3, z - e.deltaY * 0.003)));
-    } else if (scrollRef.current) {
-      e.preventDefault();
-      scrollRef.current.scrollLeft += e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      // Zoom: increase/decrease number of visible candles
+      const delta = e.deltaY > 0 ? 1 : -1; // scroll down = zoom out = more candles
+      setVisibleCount(vc => {
+        const cur = vc ?? n;
+        // Step by ~10% of current count for smooth feel
+        const step = Math.max(1, Math.round(cur * 0.1));
+        return Math.max(3, Math.min(n, cur + delta * step));
+      });
+    } else if (e.shiftKey) {
+      // Vertical pan: shift price axis up/down
+      const pricePerPx = priceRange / plotH;
+      setPriceOffset(p => p + e.deltaY * pricePerPx);
+    } else {
+      // Horizontal scroll
+      if (scrollRef.current) {
+        scrollRef.current.scrollLeft += e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      }
     }
-  }, []);
+  }, [n, priceRange, plotH]);
 
   // ── Crosshair ──────────────────────────────────────────────────────────────
   const onMouseMoveSvg = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
@@ -337,7 +373,11 @@ export default function CandlestickChart({
       );
       if (touchDistRef.current > 0) {
         const scale = dist / touchDistRef.current;
-        setZoom(z => Math.min(4, Math.max(0.3, z * scale)));
+        // pinch in (scale > 1) → fewer visible candles (zoom in)
+        setVisibleCount(vc => {
+          const cur = vc ?? n;
+          return Math.max(3, Math.min(n, Math.round(cur / scale)));
+        });
       }
       touchDistRef.current = dist;
     } else if (e.touches.length === 1 && scrollRef.current) {
@@ -345,7 +385,29 @@ export default function CandlestickChart({
       scrollRef.current.scrollLeft += dx;
       touchXRef.current = e.touches[0].clientX;
     }
-  }, []);
+  }, [n]);
+
+  // ── Reset price offset when data changes significantly ────────────────────
+  useEffect(() => { setPriceOffset(0); }, [n]);
+
+  // ── Y-axis drag handlers (drag up/down to pan price) ─────────────────────
+  const onYAxisMouseDown = useCallback((e: React.MouseEvent) => {
+    yDragRef.current = { startY: e.clientY, startOffset: priceOffset };
+    e.preventDefault();
+  }, [priceOffset]);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!yDragRef.current) return;
+      const dy = e.clientY - yDragRef.current.startY;
+      const pricePerPx = priceRange / plotH;
+      setPriceOffset(yDragRef.current.startOffset - dy * pricePerPx);
+    };
+    const onUp = () => { yDragRef.current = null; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [priceRange, plotH]);
 
   // ── Scroll to end ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -641,8 +703,17 @@ export default function CandlestickChart({
           </svg>
         </div>
 
-        {/* Fixed y-axis */}
-        <div style={{ width:Y_AXIS_W, flexShrink:0, position:"relative", height:containerH }}>
+        {/* Fixed y-axis — drag up/down to pan price, scroll to pan */}
+        <div
+          style={{ width:Y_AXIS_W, flexShrink:0, position:"relative", height:containerH, cursor:"ns-resize", userSelect:"none" }}
+          onMouseDown={onYAxisMouseDown}
+          onDoubleClick={() => { setPriceOffset(0); setVisibleCount(null); }}
+          onWheel={e => {
+            e.preventDefault();
+            const pricePerPx = priceRange / plotH;
+            setPriceOffset(p => p + e.deltaY * pricePerPx);
+          }}
+        >
           <svg width={Y_AXIS_W} height={containerH} style={{display:"block"}}>
 
             {/* Crosshair horizontal continuation */}
