@@ -398,7 +398,7 @@ function _renderBar(ax: Axes, spec: ChartSpec, palette: string[], forceStacked?:
     });
     if (isStacked) {
       if (!bottom) bottom = new Array(s.data.length).fill(0);
-      for (let j = 0; j < s.data.length; j++) bottom[j] += s.data[j];
+      for (let j = 0; j < s.data.length; j++) bottom[j] += s.data[j] ?? 0;
     }
   }
 }
@@ -444,7 +444,7 @@ function _renderCandlestick(ax: Axes, spec: ChartSpec, palette: string[]) {
   const open = s.open ?? [];
   const high = s.high ?? [];
   const low = s.low ?? [];
-  const close = s.close ?? s.data ?? [];
+  const close = (s.close ?? s.data ?? []).filter((v): v is number => v != null);
   const n = Math.min(open.length, high.length, low.length, close.length);
   if (n === 0) return;
 
@@ -488,9 +488,9 @@ function _renderWaterfall(ax: Axes, spec: ChartSpec, palette: string[]) {
   let running = 0;
   for (let i = 0; i < data.length; i++) {
     const val = data[i];
+    if (val == null) continue;
     const isTotal = spec.xLabels?.[i]?.toLowerCase() === "total";
     if (isTotal) {
-      // Total bar from 0 to running
       ax.bar([i], [running], { color: totalColor, width: 0.7 });
     } else {
       const bottom = val >= 0 ? running : running + val;
@@ -513,7 +513,7 @@ function _renderViolin(ax: Axes, spec: ChartSpec, palette: string[]) {
   for (let i = 0; i < series.length; i++) {
     const s = series[i];
     const color = s.color ?? palette[i % palette.length];
-    const raw = s.data;
+    const raw = s.data.filter((v): v is number => v != null);
     if (raw.length === 0) continue;
 
     // Compute KDE (Gaussian kernel)
@@ -584,8 +584,8 @@ function _renderBoxplot(ax: Axes, spec: ChartSpec, palette: string[]) {
       wHigh = s.whiskerHigh ?? q3;
       outliers = s.outliers ?? [];
     } else {
-      // Compute from raw data
-      const sorted = [...s.data].sort((a, b) => a - b);
+      // Compute from raw data (filter nulls)
+      const sorted = s.data.filter((v): v is number => v != null).sort((a, b) => a - b);
       const n = sorted.length;
       if (n === 0) continue;
       q1 = sorted[Math.floor(n * 0.25)];
@@ -658,7 +658,7 @@ export function extractCandlestickData(spec: ChartSpec) {
   const open = s.open ?? [];
   const high = s.high ?? [];
   const low = s.low ?? [];
-  const close = s.close ?? s.data ?? [];
+  const close = (s.close ?? s.data ?? []).filter((v): v is number => v != null);
   const n = Math.min(open.length, high.length, low.length, close.length);
   if (n === 0) return null;
   // Extract interval from subtitle (e.g. "4h · Last 12 candles" → "4h")

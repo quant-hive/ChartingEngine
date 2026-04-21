@@ -158,19 +158,19 @@ export class Axes {
 
   // ── Matplotlib-like API ───────────────────────────────────────────────
 
-  plot(yData: number[], opts?: PlotOptions): this;
-  plot(xData: number[], yData: number[], opts?: PlotOptions): this;
+  plot(yData: (number | null)[], opts?: PlotOptions): this;
+  plot(xData: number[], yData: (number | null)[], opts?: PlotOptions): this;
   plot(...args: unknown[]): this {
     let xData: number[] | null = null;
-    let yData: number[];
+    let yData: (number | null)[];
     let opts: PlotOptions = {};
 
     if (args.length >= 2 && Array.isArray(args[0]) && Array.isArray(args[1])) {
       xData = args[0] as number[];
-      yData = args[1] as number[];
+      yData = args[1] as (number | null)[];
       opts = (args[2] as PlotOptions) ?? {};
     } else {
-      yData = args[0] as number[];
+      yData = args[0] as (number | null)[];
       opts = (args[1] as PlotOptions) ?? {};
     }
 
@@ -182,12 +182,12 @@ export class Axes {
     return this;
   }
 
-  bar(xData: number[] | string[], yData: number[], opts?: BarOptions): this {
+  bar(xData: number[] | string[], yData: (number | null)[], opts?: BarOptions): this {
     this.commands.push({ kind: "bar", xData, yData, opts: opts ?? {} });
     return this;
   }
 
-  scatter(xData: number[], yData: number[], opts?: ScatterOptions): this {
+  scatter(xData: number[], yData: (number | null)[], opts?: ScatterOptions): this {
     if (!opts?.color) {
       const color = this.theme.defaultColors[this._colorIdx % this.theme.defaultColors.length];
       this._colorIdx++;
@@ -197,12 +197,12 @@ export class Axes {
     return this;
   }
 
-  fill_between(xData: number[], y1: number[], y2: number | number[] = 0, opts?: FillBetweenOptions): this {
+  fill_between(xData: number[], y1: (number | null)[], y2: number | (number | null)[] = 0, opts?: FillBetweenOptions): this {
     this.commands.push({ kind: "fill_between", xData, y1Data: y1, y2Data: y2, opts: opts ?? {} });
     return this;
   }
 
-  hist(data: number[], opts?: HistOptions): this {
+  hist(data: (number | null)[], opts?: HistOptions): this {
     this.commands.push({ kind: "hist", data, opts: opts ?? {} });
     return this;
   }
@@ -591,7 +591,7 @@ export class Axes {
             : cmd.yData.map((_, i) => String(i));
           elements.push({
             type: "bar",
-            bars: bars.map((b, i) => ({ ...b, value: cmd.yData[i], index: i })),
+            bars,
             seriesIndex: barSeriesIdx,
             color,
             label: cmd.opts.label,
@@ -624,15 +624,14 @@ export class Axes {
         }
         case "fill_between": {
           let path: string;
-          let points: { x: number; y: number }[];
+          let rawPoints: (({ x: number; y: number }) | null)[];
 
           if (Array.isArray(cmd.y2Data)) {
-            // Fill between two arrays
-            ({ path, points } = buildFillBetweenPath(cmd.y1Data, cmd.y2Data, plotArea, yMin, yMax, this._yscale, cmd.xData, xMin, xMax, this._xscale));
+            ({ path, points: rawPoints } = buildFillBetweenPath(cmd.y1Data, cmd.y2Data, plotArea, yMin, yMax, this._yscale, cmd.xData, xMin, xMax, this._xscale));
           } else {
-            // Fill from data to constant baseline
-            ({ path, points } = buildAreaPath(cmd.y1Data, plotArea, yMin, yMax, cmd.y2Data, this._yscale, cmd.xData, xMin, xMax, this._xscale));
+            ({ path, points: rawPoints } = buildAreaPath(cmd.y1Data, plotArea, yMin, yMax, cmd.y2Data, this._yscale, cmd.xData, xMin, xMax, this._xscale));
           }
+          const points = rawPoints.filter((p): p is { x: number; y: number } => p != null);
           const color = cmd.opts.color ?? this.theme.defaultColors[0];
           elements.push({
             type: "area",
