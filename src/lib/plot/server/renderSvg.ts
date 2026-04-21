@@ -6,6 +6,7 @@ import type {
   Scene, SubplotScene, PlotElement,
   LinePlotElement, AreaPlotElement, BarPlotElement, ScatterPlotElement,
   HLinePlotElement, VLinePlotElement, TextPlotElement, AnnotationPlotElement,
+  HeatmapPlotElement,
   GridScene, LegendScene, Theme,
 } from "../core/types";
 import { getTheme } from "../core/theme";
@@ -109,6 +110,20 @@ function renderLegend(legend: LegendScene, plotArea: { x: number; y: number; w: 
     .join("\n");
 }
 
+function renderHeatmap(el: HeatmapPlotElement): string {
+  const parts: string[] = [];
+  for (const cell of el.cells) {
+    parts.push(`<rect x="${cell.x}" y="${cell.y}" width="${cell.w}" height="${cell.h}" fill="${cell.color}"/>`);
+    const hex = cell.color.replace("#", "");
+    const r = parseInt(hex.slice(0, 2), 16), g = parseInt(hex.slice(2, 4), 16), b = parseInt(hex.slice(4, 6), 16);
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    const textColor = lum > 0.5 ? "#121212" : "#ffffff";
+    const fontSize = Math.max(8, Math.min(cell.w, cell.h) * 0.25);
+    parts.push(`<text x="${cell.x + cell.w / 2}" y="${cell.y + cell.h / 2 + fontSize * 0.35}" text-anchor="middle" font-size="${fontSize}" font-weight="500" fill="${textColor}" font-family="'Inter', sans-serif">${cell.value.toFixed(2)}</text>`);
+  }
+  return parts.join("\n");
+}
+
 function renderElement(el: PlotElement, theme: Theme, plotId: string, gradientId: string): string {
   switch (el.type) {
     case "line": return renderLine(el);
@@ -119,6 +134,7 @@ function renderElement(el: PlotElement, theme: Theme, plotId: string, gradientId
     case "vline": return renderVLine(el);
     case "text": return renderText(el);
     case "annotation": return renderAnnotation(el);
+    case "heatmap": return renderHeatmap(el);
   }
 }
 

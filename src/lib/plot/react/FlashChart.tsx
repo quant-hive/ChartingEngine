@@ -11,6 +11,7 @@ import type {
   Scene, SubplotScene,
   LinePlotElement, AreaPlotElement, BarPlotElement, BarRect, ScatterPlotElement,
   HLinePlotElement, VLinePlotElement, TextPlotElement, AnnotationPlotElement,
+  HeatmapPlotElement,
   Theme, BarThemeStyle,
 } from "../core/types";
 import { getTheme } from "../core/theme";
@@ -168,7 +169,8 @@ const FP_CSS = `
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function fmtVal(v: number): string {
+function fmtVal(v: number | null): string {
+  if (v == null) return "—";
   if (Math.abs(v) >= 1e6) return v.toExponential(2);
   if (Math.abs(v) >= 100) return v.toLocaleString("en-US", { maximumFractionDigits: 0 });
   if (Math.abs(v) >= 1) return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -243,16 +245,22 @@ function LineHoverOverlay({ subplot, uid }: { subplot: SubplotScene; uid: string
   return (
     <>
       {Array.from({ length: nPoints }, (_, i) => {
-        const px = lineEls[0].points[i].x;
+        const pt0 = lineEls[0].points[i];
+        if (pt0 == null) return null;
+        const px = pt0.x;
 
-        // Strip boundaries
+        // Strip boundaries — find nearest non-null neighbors
         let stripL: number, stripR: number;
         if (nPoints === 1) {
           stripL = pa.x;
           stripR = pa.x + pa.w;
         } else {
-          stripL = i > 0 ? px - (px - lineEls[0].points[i - 1].x) / 2 : pa.x;
-          stripR = i < nPoints - 1 ? px + (lineEls[0].points[i + 1].x - px) / 2 : pa.x + pa.w;
+          let prevX = pa.x;
+          for (let j = i - 1; j >= 0; j--) { const p = lineEls[0].points[j]; if (p != null) { prevX = p.x; break; } }
+          let nextX = pa.x + pa.w;
+          for (let j = i + 1; j < nPoints; j++) { const p = lineEls[0].points[j]; if (p != null) { nextX = p.x; break; } }
+          stripL = i > 0 ? px - (px - prevX) / 2 : pa.x;
+          stripR = i < nPoints - 1 ? px + (nextX - px) / 2 : pa.x + pa.w;
         }
 
         // Find closest tick label
@@ -267,7 +275,9 @@ function LineHoverOverlay({ subplot, uid }: { subplot: SubplotScene; uid: string
         const entries: { color: string; label: string; valueStr: string }[] = [];
         for (const el of lineEls) {
           if (el.dataValues && i < el.dataValues.length) {
-            entries.push({ color: el.color, label: el.label ?? el.color, valueStr: fmtVal(el.dataValues[i]) });
+            const val = el.dataValues[i];
+            if (val == null) continue;
+            entries.push({ color: el.color, label: el.label ?? el.color, valueStr: fmtVal(val) });
           }
         }
 
@@ -281,7 +291,9 @@ function LineHoverOverlay({ subplot, uid }: { subplot: SubplotScene; uid: string
               {/* Dots on each line */}
               {lineEls.map((el, elIdx) => {
                 if (i >= el.points.length) return null;
-                const py = el.points[i].y;
+                const pt = el.points[i];
+                if (pt == null) return null;
+                const py = pt.y;
                 return (
                   <g key={`dot-${elIdx}`}>
                     <circle cx={px} cy={py} r={3.5} fill="#121212" stroke={el.color} strokeWidth={1.2} />
@@ -983,6 +995,43 @@ function SubplotRenderer({ subplot, theme }: { subplot: SubplotScene; theme: The
               >
                 {ann.text}
               </text>
+            </g>
+          );
+        }
+
+        if (el.type === "heatmap") {
+          const hm = el as HeatmapPlotElement;
+          return (
+            <g key={`heatmap-${elIdx}`}
+              style={visible ? { animation: `fp-areaFade 0.8s ease ${T_DATA}s both` } : { opacity: 0 }}>
+              {hm.cells.map((cell, ci) => {
+                // Luminance check for text contrast
+                const hex = cell.color.replace("#", "");
+                const r = parseInt(hex.slice(0, 2), 16), g = parseInt(hex.slice(2, 4), 16), b = parseInt(hex.slice(4, 6), 16);
+                const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+                const textColor = lum > 0.5 ? "#121212" : "#ffffff";
+                const fontSize = Math.max(8, Math.min(cell.w, cell.h) * 0.25);
+                return (
+                  <g key={ci}>
+                    <rect
+                      x={cell.x.toFixed(1)} y={cell.y.toFixed(1)}
+                      width={cell.w.toFixed(1)} height={cell.h.toFixed(1)}
+                      fill={cell.color}
+                    />
+                    <text
+                      x={(cell.x + cell.w / 2).toFixed(1)}
+                      y={(cell.y + cell.h / 2 + fontSize * 0.35).toFixed(1)}
+                      textAnchor="middle"
+                      fontSize={fontSize}
+                      fill={textColor}
+                      fontFamily="'Inter', sans-serif"
+                      fontWeight={500}
+                    >
+                      {cell.value.toFixed(2)}
+                    </text>
+                  </g>
+                );
+              })}
             </g>
           );
         }

@@ -25,6 +25,7 @@ export type {
   Scene, SubplotScene, PlotElement,
   LinePlotElement, AreaPlotElement, BarPlotElement, ScatterPlotElement,
   HLinePlotElement, VLinePlotElement, TextPlotElement, AnnotationPlotElement,
+  HeatmapPlotElement, HeatmapCell,
   BarRect, ScatterPoint,
   AxisScene, GridScene, GridLine, LegendScene, LegendEntry,
   TextStyle,

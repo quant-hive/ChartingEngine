@@ -115,12 +115,13 @@ export function logScale(
 
 export function scaleValue(
   scaleType: ScaleType,
-  value: number,
+  value: number | null,
   domainMin: number,
   domainMax: number,
   rangeMin: number,
   rangeMax: number
 ): number {
+  if (value == null) return NaN;
   switch (scaleType) {
     case "log":
       return logScale(value, domainMin, domainMax, rangeMin, rangeMax);

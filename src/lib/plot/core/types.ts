@@ -252,11 +252,12 @@ export type PlotElement =
   | HLinePlotElement
   | VLinePlotElement
   | TextPlotElement
-  | AnnotationPlotElement;
+  | AnnotationPlotElement
+  | HeatmapPlotElement;
 
 export interface LinePlotElement {
   type: "line";
-  points: Point[];
+  points: (Point | null)[];
   path: string; // SVG path data
   color: string;
   lineWidth: number;
@@ -264,7 +265,7 @@ export interface LinePlotElement {
   alpha: number;
   label?: string;
   zorder: number;
-  dataValues?: number[]; // actual y-data values (for tooltip display)
+  dataValues?: (number | null)[]; // actual y-data values (for tooltip display)
 }
 
 export interface AreaPlotElement {
@@ -354,6 +355,27 @@ export interface AnnotationPlotElement {
   style: TextStyle;
   arrowColor?: string;
   arrowWidth?: number;
+  zorder: number;
+}
+
+export interface HeatmapCell {
+  row: number;
+  col: number;
+  value: number;
+  color: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface HeatmapPlotElement {
+  type: "heatmap";
+  cells: HeatmapCell[];
+  rowCount: number;
+  colCount: number;
+  rowLabels?: string[];
+  colLabels?: string[];
   zorder: number;
 }
 

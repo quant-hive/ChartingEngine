@@ -6,7 +6,7 @@
 // renderChart normalizes the variant into the correct rendering path.
 
 import { figure, Axes } from "./figure";
-import type { Scene } from "./types";
+import type { Scene, LineStyle } from "./types";
 
 // ── All graph types the agent can request ──────────────────────────────
 //
@@ -98,8 +98,8 @@ export const DEFAULT_COLORS = {
 // ── ChartSpec: the JSON schema the agent sends ─────────────────────────
 
 export interface SeriesSpec {
-  /** Y-axis values (close prices for candlestick) */
-  data: number[];
+  /** Y-axis values (close prices for candlestick). null = gap/skip. */
+  data: (number | null)[];
   /** Optional X-axis values (defaults to 0, 1, 2, ...) */
   x?: number[];
   /** Series label for legend */
@@ -175,8 +175,8 @@ export interface HeatmapSpec {
   rowLabels?: string[];
   /** Column labels */
   colLabels?: string[];
-  /** Color range: [min_color, max_color]. Default: theme heatmap palette */
-  colorRange?: [string, string];
+  /** Color range: 2 colors (linear) or 3 colors (diverging: low→mid→high) */
+  colorRange?: string[];
 }
 
 export interface AxisSpec {
@@ -246,8 +246,8 @@ export interface ChartSpec {
   height?: number;
 
   /** Reference lines */
-  hlines?: { y: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" }[];
-  vlines?: { x: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" }[];
+  hlines?: { y: number; color?: string; label?: string; lineStyle?: LineStyle }[];
+  vlines?: { x: number; color?: string; label?: string; lineStyle?: LineStyle }[];
 
   /** Annotations */
   annotations?: { text: string; x: number; y: number; color?: string }[];
@@ -314,10 +314,16 @@ export function renderChart(spec: ChartSpec): Scene {
     case "boxplot":
       _renderBoxplot(ax, spec, palette);
       break;
-    case "heatmap":
-      // Heatmaps rendered as colored rects — use heatmap spec
-      // TODO: implement when Axes gains heatmap support
+    case "heatmap": {
+      const hm = spec.heatmap;
+      if (hm?.data) {
+        const colorRange = hm.colorRange ?? ["#0d47a1", "#ffffff", "#b71c1c"];
+        ax.heatmap(hm.data, { colorRange, rowLabels: hm.rowLabels, colLabels: hm.colLabels });
+        if (hm.colLabels) ax.set_xticks(hm.colLabels);
+        ax.grid(false);
+      }
       break;
+    }
     case "surface":
       // Surface plots use the Python flash-plot renderer (not TS Axes).
       // Use extractSurfaceSpec() to get data for the server route.

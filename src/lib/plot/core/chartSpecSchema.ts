@@ -45,7 +45,7 @@ const hexColor = z
 const SeriesSpecSchema = z.object({
   // data is optional at the field level; presence/non-emptiness is enforced
   // in superRefine based on chart type (boxplot allows pre-computed stats instead)
-  data:         z.array(z.number()).optional(),
+  data:         z.array(z.number().nullable()).optional(),
   x:            z.array(z.number()).optional(),
   label:        z.string().optional(),
   color:        hexColor.optional(),
@@ -90,7 +90,7 @@ const HeatmapSpecSchema = z.object({
   data:       z.array(z.array(z.number())).min(1, "must be a non-empty 2D array"),
   rowLabels:  z.array(z.string()).optional(),
   colLabels:  z.array(z.string()).optional(),
-  colorRange: z.tuple([z.string(), z.string()]).optional(),
+  colorRange: z.array(hexColor).min(2).max(3, "must have 2 or 3 colors").optional(),
 });
 
 const AxisSpecSchema = z.object({
@@ -128,13 +128,13 @@ const BaseChartSpecSchema = z.object({
     y:         z.number(),
     color:     hexColor.optional(),
     label:     z.string().optional(),
-    lineStyle: z.enum(["solid", "dashed"]).optional(),
+    lineStyle: z.enum(["solid", "dashed", "dotted", "dashdot"]).optional(),
   })).optional(),
   vlines: z.array(z.object({
     x:         z.number(),
     color:     hexColor.optional(),
     label:     z.string().optional(),
-    lineStyle: z.enum(["solid", "dashed"]).optional(),
+    lineStyle: z.enum(["solid", "dashed", "dotted", "dashdot"]).optional(),
   })).optional(),
   annotations: z.array(z.object({
     text:  z.string(),
