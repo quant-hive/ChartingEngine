@@ -166,9 +166,16 @@ export default function Surface3D({
 
   const handleMouseUp = useCallback(() => setDragging(false), []);
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    setZoom((prev) => Math.max(0.4, Math.min(3.0, prev - e.deltaY * 0.002)));
+  // Native wheel listener — { passive: false } lets preventDefault stop page scroll
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      setZoom((prev) => Math.max(0.4, Math.min(3.0, prev - e.deltaY * 0.002)));
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
   }, []);
 
   const animating = useRef(false);
@@ -351,7 +358,6 @@ export default function Surface3D({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
       >
         <rect x={0} y={0} width={width} height={height} fill="transparent" />

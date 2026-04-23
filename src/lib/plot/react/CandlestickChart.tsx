@@ -41,6 +41,7 @@ export interface CandlestickChartProps {
   showVolume?: boolean;
   formingIndex?: number;
   defaultChartType?: "candle" | "line" | "area";
+  animate?: boolean;
 }
 
 // ── Color constants ──────────────────────────────────────────────────────────
@@ -165,13 +166,15 @@ export default function CandlestickChart({
   showVolume = false,
   formingIndex,
   defaultChartType = "candle",
+  animate: animateProp = true,
 }: CandlestickChartProps) {
   const wrapRef      = useRef<HTMLDivElement>(null);
   const scrollRef    = useRef<HTMLDivElement>(null);
+  const yAxisRef     = useRef<HTMLDivElement>(null);
   const touchDistRef = useRef<number>(0);
   const touchXRef    = useRef<number>(0);
 
-  const [visible,     setVisible]    = useState(false);
+  const [visible,     setVisible]    = useState(!animateProp);
   const [hovered,     setHovered]    = useState<number | null>(null);
   const [intTf,       setIntTf]      = useState("1m");
   const [utc,         setUtc]        = useState(utcStr);
@@ -201,14 +204,11 @@ export default function CandlestickChart({
   const containerW = propW ?? (measuredW > 0 ? measuredW : 0);
   const ready = containerW > 0;
 
-  // ── Intersection observer ──────────────────────────────────────────────────
+  // ── Trigger animation on mount ──────────────────────────────────────────────
   useEffect(() => {
-    const el = wrapRef.current; if (!el) return;
-    const obs = new IntersectionObserver(
-      ([e]) => { if (e.isIntersecting) { setVisible(true); obs.disconnect(); } }, { threshold: 0.1 }
-    );
-    obs.observe(el); return () => obs.disconnect();
-  }, []);
+    if (!animateProp) return;
+    requestAnimationFrame(() => setVisible(true));
+  }, [animateProp]);
 
   // ── UTC clock ──────────────────────────────────────────────────────────────
   useEffect(() => { const id = setInterval(() => setUtc(utcStr()), 1000); return () => clearInterval(id); }, []);
@@ -314,28 +314,42 @@ export default function CandlestickChart({
   // ctrl/meta + scroll  →  zoom (change visible candle count)
   // shift + scroll      →  vertical pan (price offset)
   // plain scroll        →  horizontal time scroll
-  const onWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    if (e.ctrlKey || e.metaKey) {
-      // Zoom: increase/decrease number of visible candles
-      const delta = e.deltaY > 0 ? 1 : -1; // scroll down = zoom out = more candles
-      setVisibleCount(vc => {
-        const cur = vc ?? n;
-        // Step by ~10% of current count for smooth feel
-        const step = Math.max(1, Math.round(cur * 0.1));
-        return Math.max(3, Math.min(n, cur + delta * step));
-      });
-    } else if (e.shiftKey) {
-      // Vertical pan: shift price axis up/down
+  // Native wheel listener on scroll area — { passive: false } lets preventDefault stop page scroll
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        const delta = e.deltaY > 0 ? 1 : -1;
+        setVisibleCount(vc => {
+          const cur = vc ?? n;
+          const step = Math.max(1, Math.round(cur * 0.1));
+          return Math.max(3, Math.min(n, cur + delta * step));
+        });
+      } else if (e.shiftKey) {
+        const pricePerPx = priceRange / plotH;
+        setPriceOffset(p => p + e.deltaY * pricePerPx);
+      } else {
+        el.scrollLeft += e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      }
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [n, priceRange, plotH]);
+
+  // Native wheel listener on Y-axis div
+  useEffect(() => {
+    const el = yAxisRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
       const pricePerPx = priceRange / plotH;
       setPriceOffset(p => p + e.deltaY * pricePerPx);
-    } else {
-      // Horizontal scroll
-      if (scrollRef.current) {
-        scrollRef.current.scrollLeft += e.deltaY !== 0 ? e.deltaY : e.deltaX;
-      }
-    }
-  }, [n, priceRange, plotH]);
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [priceRange, plotH]);
 
   // ── Crosshair ──────────────────────────────────────────────────────────────
   const onMouseMoveSvg = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
@@ -446,7 +460,7 @@ export default function CandlestickChart({
       <div style={{ display:"flex", position:"relative", height:containerH }}>
 
         {/* Scrollable SVG */}
-        <div ref={scrollRef} className="fp-candle-scroll" onWheel={onWheel}
+        <div ref={scrollRef} className="fp-candle-scroll"
           onTouchStart={onTouchStart} onTouchMove={onTouchMove}
           style={{ flex:1, overflowX:"auto", overflowY:"hidden", position:"relative" }}
         >
@@ -709,14 +723,10 @@ export default function CandlestickChart({
 
         {/* Fixed y-axis — drag up/down to pan price, scroll to pan */}
         <div
+          ref={yAxisRef}
           style={{ width:Y_AXIS_W, flexShrink:0, position:"relative", height:containerH, cursor:"ns-resize", userSelect:"none" }}
           onMouseDown={onYAxisMouseDown}
           onDoubleClick={() => { setPriceOffset(0); setVisibleCount(null); }}
-          onWheel={e => {
-            e.preventDefault();
-            const pricePerPx = priceRange / plotH;
-            setPriceOffset(p => p + e.deltaY * pricePerPx);
-          }}
         >
           <svg width={Y_AXIS_W} height={containerH} style={{display:"block"}}>
 
@@ -733,7 +743,7 @@ export default function CandlestickChart({
               if (y < PAD.top - 6 || y > PAD.top + plotH + 6) return null;
               return (
                 <text key={`yt${i}`} x={6} y={y+4} fontSize={yFontSz}
-                  fontFamily="var(--font-instrument-serif),'Instrument Serif',serif"
+                  fontFamily="var(--font-eb-garamond),'EB Garamond','Times New Roman',Georgia,serif"
                   fill={C.yLbl}
                   style={visible?{animation:`fp-cLblY 0.35s ease ${(0.45+i*0.03).toFixed(2)}s both`} as React.CSSProperties:{opacity:0}}
                 >{fmt(p)}</text>
@@ -747,7 +757,7 @@ export default function CandlestickChart({
                 <g>
                   <rect x={1} y={crosshair.y-9} width={Y_AXIS_W-2} height={18} fill={C.crossBg} rx={2}/>
                   <text x={Y_AXIS_W/2} y={crosshair.y+4.5} textAnchor="middle" fontSize={yFontSz - 1} fontWeight={600}
-                    fontFamily="var(--font-instrument-serif),'Instrument Serif',serif" fill={C.crossTxt}
+                    fontFamily="var(--font-eb-garamond),'EB Garamond','Times New Roman',Georgia,serif" fill={C.crossTxt}
                   >{fmt(price)}</text>
                 </g>
               );
@@ -764,7 +774,7 @@ export default function CandlestickChart({
                   <g key={i} style={visible?{animation:"fp-cFade 0.5s ease 1.5s both"} as React.CSSProperties:{opacity:0}}>
                     <rect x={2} y={b.y-10} width={Y_AXIS_W-4} height={20} fill={col} rx={2}/>
                     <text x={6} y={b.y+4} fontSize={yFontSz}
-                      fontFamily="var(--font-instrument-serif),'Instrument Serif',serif"
+                      fontFamily="var(--font-eb-garamond),'EB Garamond','Times New Roman',Georgia,serif"
                       fill="#fff" fontWeight={400}
                     >{fmt(b.price)}</text>
                   </g>

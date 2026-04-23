@@ -19,60 +19,52 @@ export function useChartAnimation(xLabelCount: number, yTickCount: number, barCo
   const sweepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (!ref.current) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setPhase(1);
-          setTimeout(() => setPhase(2), 675);
-          setTimeout(() => setPhase(3), 1280);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    requestAnimationFrame(() => {
+      setPhase(1);
+      timers.push(setTimeout(() => setPhase(2), 675));
+      timers.push(setTimeout(() => setPhase(3), 1280));
 
-          // Bar sweep animation
-          if (barCount && barCount > 0) {
-            const sweepDelay = 1280 + 810 + barCount * 54;
-            setTimeout(() => {
-              let step = 0;
-              setSweepIndex(0);
-              sweepTimerRef.current = setInterval(() => {
-                step += 1;
-                if (step >= barCount) {
-                  setSweepIndex(-1);
-                  if (sweepTimerRef.current) {
-                    clearInterval(sweepTimerRef.current);
-                    sweepTimerRef.current = null;
-                  }
-                } else {
-                  setSweepIndex(step);
-                }
-              }, 120);
-            }, sweepDelay);
-          }
-
-          // Shimmer animation
-          setTimeout(() => {
-            const totalSteps = Math.max(xLabelCount, yTickCount) + 2;
-            let step = 0;
-            setShimmerStep(0);
-            shimmerTimerRef.current = setInterval(() => {
-              step += 1;
-              if (step > totalSteps) {
-                setShimmerStep(-1);
-                if (shimmerTimerRef.current) {
-                  clearInterval(shimmerTimerRef.current);
-                  shimmerTimerRef.current = null;
-                }
-              } else {
-                setShimmerStep(step);
+      if (barCount && barCount > 0) {
+        const sweepDelay = 1280 + 810 + barCount * 54;
+        timers.push(setTimeout(() => {
+          let step = 0;
+          setSweepIndex(0);
+          sweepTimerRef.current = setInterval(() => {
+            step += 1;
+            if (step >= barCount) {
+              setSweepIndex(-1);
+              if (sweepTimerRef.current) {
+                clearInterval(sweepTimerRef.current);
+                sweepTimerRef.current = null;
               }
-            }, 80);
-          }, 2500);
-        }
-      },
-      { threshold: 0.15 },
-    );
-    observer.observe(ref.current);
+            } else {
+              setSweepIndex(step);
+            }
+          }, 120);
+        }, sweepDelay));
+      }
+
+      timers.push(setTimeout(() => {
+        const totalSteps = Math.max(xLabelCount, yTickCount) + 2;
+        let step = 0;
+        setShimmerStep(0);
+        shimmerTimerRef.current = setInterval(() => {
+          step += 1;
+          if (step > totalSteps) {
+            setShimmerStep(-1);
+            if (shimmerTimerRef.current) {
+              clearInterval(shimmerTimerRef.current);
+              shimmerTimerRef.current = null;
+            }
+          } else {
+            setShimmerStep(step);
+          }
+        }, 80);
+      }, 2500));
+    });
     return () => {
-      observer.disconnect();
+      timers.forEach(clearTimeout);
       if (shimmerTimerRef.current) clearInterval(shimmerTimerRef.current);
       if (sweepTimerRef.current) clearInterval(sweepTimerRef.current);
     };

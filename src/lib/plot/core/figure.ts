@@ -11,8 +11,6 @@ import type {
   VLinePlotElement,
   TextPlotElement,
   AnnotationPlotElement,
-  HeatmapPlotElement,
-  HeatmapCell,
   PlotOptions,
   BarOptions,
   ScatterOptions,
@@ -35,64 +33,36 @@ import { computeLayout, computeSubplotBounds, DEFAULT_WIDTH, DEFAULT_HEIGHT } fr
 import { buildLinePath, buildAreaPath, buildFillBetweenPath, buildBarRects, buildScatterPoints, computeHistogramBins } from "./paths";
 import { getTheme } from "./theme";
 
-// ── Color interpolation (for heatmap) ───────────────────────────────────
-
-function parseHex(hex: string): [number, number, number] {
-  const h = hex.replace("#", "");
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
-
-function interpolateColor(c1: string, c2: string, t: number): string {
-  const [r1, g1, b1] = parseHex(c1);
-  const [r2, g2, b2] = parseHex(c2);
-  const r = Math.round(r1 + (r2 - r1) * t);
-  const g = Math.round(g1 + (g2 - g1) * t);
-  const b = Math.round(b1 + (b2 - b1) * t);
-  return `#${[r, g, b].map(v => v.toString(16).padStart(2, "0")).join("")}`;
-}
-
-function colorFromRange(value: number, min: number, max: number, colorRange: string[]): string {
-  const t = max === min ? 0.5 : (value - min) / (max - min);
-  const clamped = Math.max(0, Math.min(1, t));
-  if (colorRange.length === 2) {
-    return interpolateColor(colorRange[0], colorRange[1], clamped);
-  }
-  if (clamped <= 0.5) {
-    return interpolateColor(colorRange[0], colorRange[1], clamped * 2);
-  }
-  return interpolateColor(colorRange[1], colorRange[2], (clamped - 0.5) * 2);
-}
-
 // ── Internal command types ──────────────────────────────────────────────
 
 interface PlotCmd {
   kind: "line";
   xData: number[] | null;
-  yData: (number | null)[];
+  yData: number[];
   opts: PlotOptions;
 }
 interface BarCmd {
   kind: "bar";
   xData: number[] | string[];
-  yData: (number | null)[];
+  yData: number[];
   opts: BarOptions;
 }
 interface ScatterCmd {
   kind: "scatter";
   xData: number[];
-  yData: (number | null)[];
+  yData: number[];
   opts: ScatterOptions;
 }
 interface FillCmd {
   kind: "fill_between";
   xData: number[];
-  y1Data: (number | null)[];
-  y2Data: number | (number | null)[];
+  y1Data: number[];
+  y2Data: number | number[];
   opts: FillBetweenOptions;
 }
 interface HistCmd {
   kind: "hist";
-  data: (number | null)[];
+  data: number[];
   opts: HistOptions;
 }
 interface HLineCmd {
@@ -120,15 +90,7 @@ interface AnnotateCmd {
   opts: AnnotateOptions;
 }
 
-interface HeatmapCmd {
-  kind: "heatmap";
-  data: number[][];
-  colorRange: string[];
-  rowLabels?: string[];
-  colLabels?: string[];
-}
-
-type DrawCmd = PlotCmd | BarCmd | ScatterCmd | FillCmd | HistCmd | HLineCmd | VLineCmd | TextCmd | AnnotateCmd | HeatmapCmd;
+type DrawCmd = PlotCmd | BarCmd | ScatterCmd | FillCmd | HistCmd | HLineCmd | VLineCmd | TextCmd | AnnotateCmd;
 
 // ── Axes Class ──────────────────────────────────────────────────────────
 
@@ -158,19 +120,19 @@ export class Axes {
 
   // ── Matplotlib-like API ───────────────────────────────────────────────
 
-  plot(yData: (number | null)[], opts?: PlotOptions): this;
-  plot(xData: number[], yData: (number | null)[], opts?: PlotOptions): this;
+  plot(yData: number[], opts?: PlotOptions): this;
+  plot(xData: number[], yData: number[], opts?: PlotOptions): this;
   plot(...args: unknown[]): this {
     let xData: number[] | null = null;
-    let yData: (number | null)[];
+    let yData: number[];
     let opts: PlotOptions = {};
 
     if (args.length >= 2 && Array.isArray(args[0]) && Array.isArray(args[1])) {
       xData = args[0] as number[];
-      yData = args[1] as (number | null)[];
+      yData = args[1] as number[];
       opts = (args[2] as PlotOptions) ?? {};
     } else {
-      yData = args[0] as (number | null)[];
+      yData = args[0] as number[];
       opts = (args[1] as PlotOptions) ?? {};
     }
 
@@ -182,12 +144,12 @@ export class Axes {
     return this;
   }
 
-  bar(xData: number[] | string[], yData: (number | null)[], opts?: BarOptions): this {
+  bar(xData: number[] | string[], yData: number[], opts?: BarOptions): this {
     this.commands.push({ kind: "bar", xData, yData, opts: opts ?? {} });
     return this;
   }
 
-  scatter(xData: number[], yData: (number | null)[], opts?: ScatterOptions): this {
+  scatter(xData: number[], yData: number[], opts?: ScatterOptions): this {
     if (!opts?.color) {
       const color = this.theme.defaultColors[this._colorIdx % this.theme.defaultColors.length];
       this._colorIdx++;
@@ -197,12 +159,12 @@ export class Axes {
     return this;
   }
 
-  fill_between(xData: number[], y1: (number | null)[], y2: number | (number | null)[] = 0, opts?: FillBetweenOptions): this {
+  fill_between(xData: number[], y1: number[], y2: number | number[] = 0, opts?: FillBetweenOptions): this {
     this.commands.push({ kind: "fill_between", xData, y1Data: y1, y2Data: y2, opts: opts ?? {} });
     return this;
   }
 
-  hist(data: (number | null)[], opts?: HistOptions): this {
+  hist(data: number[], opts?: HistOptions): this {
     this.commands.push({ kind: "hist", data, opts: opts ?? {} });
     return this;
   }
@@ -224,17 +186,6 @@ export class Axes {
 
   annotate(text: string, xy: [number, number], xytext?: [number, number], opts?: AnnotateOptions): this {
     this.commands.push({ kind: "annotate", text, xy, xytext, opts: opts ?? {} });
-    return this;
-  }
-
-  heatmap(data: number[][], opts?: { colorRange?: string[]; rowLabels?: string[]; colLabels?: string[] }): this {
-    this.commands.push({
-      kind: "heatmap",
-      data,
-      colorRange: opts?.colorRange ?? ["#0d47a1", "#ffffff", "#b71c1c"],
-      rowLabels: opts?.rowLabels,
-      colLabels: opts?.colLabels,
-    });
     return this;
   }
 
@@ -309,7 +260,7 @@ export class Axes {
     for (let i = 0; i < this.commands.length; i++) {
       const cmd = this.commands[i];
       if (cmd.kind === "line") {
-        for (const v of cmd.yData) { if (v != null) { yMin = Math.min(yMin, v); yMax = Math.max(yMax, v); } }
+        for (const v of cmd.yData) { yMin = Math.min(yMin, v); yMax = Math.max(yMax, v); }
         if (cmd.xData) {
           for (const v of cmd.xData) { xMin = Math.min(xMin, v); xMax = Math.max(xMax, v); }
         } else {
@@ -321,26 +272,26 @@ export class Axes {
         barSeriesCount++;
         if (cmd.opts.bottom) {
           hasStackedBars = true;
+          // For stacked bars, the top of each bar is bottom[i] + yData[i]
           for (let j = 0; j < cmd.yData.length; j++) {
-            if (cmd.yData[j] == null) continue;
             const bot = cmd.opts.bottom[j] ?? 0;
-            const top = bot + cmd.yData[j]!;
+            const top = bot + cmd.yData[j];
             yMin = Math.min(yMin, bot);
             yMax = Math.max(yMax, top);
           }
         } else {
-          for (const v of cmd.yData) { if (v != null) { yMin = Math.min(yMin, v); yMax = Math.max(yMax, v); } }
+          for (const v of cmd.yData) { yMin = Math.min(yMin, v); yMax = Math.max(yMax, v); }
         }
         if (typeof cmd.xData[0] === "number") {
           for (const v of cmd.xData as number[]) { xMin = Math.min(xMin, v); xMax = Math.max(xMax, v); }
         }
       } else if (cmd.kind === "scatter") {
         for (const v of cmd.xData) { xMin = Math.min(xMin, v); xMax = Math.max(xMax, v); }
-        for (const v of cmd.yData) { if (v != null) { yMin = Math.min(yMin, v); yMax = Math.max(yMax, v); } }
+        for (const v of cmd.yData) { yMin = Math.min(yMin, v); yMax = Math.max(yMax, v); }
       } else if (cmd.kind === "fill_between") {
-        for (const v of cmd.y1Data) { if (v != null) { yMin = Math.min(yMin, v); yMax = Math.max(yMax, v); } }
+        for (const v of cmd.y1Data) { yMin = Math.min(yMin, v); yMax = Math.max(yMax, v); }
         if (Array.isArray(cmd.y2Data)) {
-          for (const v of cmd.y2Data) { if (v != null) { yMin = Math.min(yMin, v); yMax = Math.max(yMax, v); } }
+          for (const v of cmd.y2Data) { yMin = Math.min(yMin, v); yMax = Math.max(yMax, v); }
         } else {
           yMin = Math.min(yMin, cmd.y2Data);
           yMax = Math.max(yMax, cmd.y2Data);
@@ -541,23 +492,15 @@ export class Axes {
       switch (cmd.kind) {
         case "line": {
           let path: string;
-          let points: ({ x: number; y: number } | null)[];
+          let points: { x: number; y: number }[];
 
           if (cmd.xData) {
-            points = cmd.yData.map((v, i) =>
-              v != null ? {
-                x: plotArea.x + scaleValue(this._xscale, cmd.xData![i], xMin, xMax, 0, plotArea.w),
-                y: plotArea.y + plotArea.h - scaleValue(this._yscale, v, yMin, yMax, 0, plotArea.h),
-              } : null
-            );
-            let inSeg = false;
-            path = "";
-            for (const p of points) {
-              if (p == null) { inSeg = false; continue; }
-              path += `${inSeg ? "L" : "M"}${p.x.toFixed(1)},${p.y.toFixed(1)} `;
-              inSeg = true;
-            }
-            path = path.trim();
+            // Custom x data — map using x scale
+            points = cmd.yData.map((v, i) => ({
+              x: plotArea.x + scaleValue(this._xscale, cmd.xData![i], xMin, xMax, 0, plotArea.w),
+              y: plotArea.y + plotArea.h - scaleValue(this._yscale, v, yMin, yMax, 0, plotArea.h),
+            }));
+            path = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
           } else {
             ({ path, points } = buildLinePath(cmd.yData, plotArea, yMin, yMax, this._yscale));
           }
@@ -591,7 +534,7 @@ export class Axes {
             : cmd.yData.map((_, i) => String(i));
           elements.push({
             type: "bar",
-            bars,
+            bars: bars.map((b, i) => ({ ...b, value: cmd.yData[i], index: i })),
             seriesIndex: barSeriesIdx,
             color,
             label: cmd.opts.label,
@@ -624,14 +567,15 @@ export class Axes {
         }
         case "fill_between": {
           let path: string;
-          let rawPoints: (({ x: number; y: number }) | null)[];
+          let points: { x: number; y: number }[];
 
           if (Array.isArray(cmd.y2Data)) {
-            ({ path, points: rawPoints } = buildFillBetweenPath(cmd.y1Data, cmd.y2Data, plotArea, yMin, yMax, this._yscale, cmd.xData, xMin, xMax, this._xscale));
+            // Fill between two arrays
+            ({ path, points } = buildFillBetweenPath(cmd.y1Data, cmd.y2Data, plotArea, yMin, yMax, this._yscale, cmd.xData, xMin, xMax, this._xscale));
           } else {
-            ({ path, points: rawPoints } = buildAreaPath(cmd.y1Data, plotArea, yMin, yMax, cmd.y2Data, this._yscale, cmd.xData, xMin, xMax, this._xscale));
+            // Fill from data to constant baseline
+            ({ path, points } = buildAreaPath(cmd.y1Data, plotArea, yMin, yMax, cmd.y2Data, this._yscale, cmd.xData, xMin, xMax, this._xscale));
           }
-          const points = rawPoints.filter((p): p is { x: number; y: number } => p != null);
           const color = cmd.opts.color ?? this.theme.defaultColors[0];
           elements.push({
             type: "area",
@@ -744,41 +688,6 @@ export class Axes {
             arrowWidth: cmd.opts.arrowprops?.lw,
             zorder: cmd.opts.zorder ?? zorder,
           } satisfies AnnotationPlotElement);
-          break;
-        }
-        case "heatmap": {
-          const rows = cmd.data.length;
-          const cols = cmd.data[0]?.length ?? 0;
-          if (rows === 0 || cols === 0) break;
-          let vmin = Infinity, vmax = -Infinity;
-          for (const row of cmd.data) {
-            for (const v of row) { vmin = Math.min(vmin, v); vmax = Math.max(vmax, v); }
-          }
-          const cellW = plotArea.w / cols;
-          const cellH = plotArea.h / rows;
-          const cells: HeatmapCell[] = [];
-          for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-              const value = cmd.data[r][c];
-              cells.push({
-                row: r, col: c, value,
-                color: colorFromRange(value, vmin, vmax, cmd.colorRange),
-                x: plotArea.x + c * cellW,
-                y: plotArea.y + r * cellH,
-                w: cellW,
-                h: cellH,
-              });
-            }
-          }
-          elements.push({
-            type: "heatmap",
-            cells,
-            rowCount: rows,
-            colCount: cols,
-            rowLabels: cmd.rowLabels,
-            colLabels: cmd.colLabels,
-            zorder,
-          } satisfies HeatmapPlotElement);
           break;
         }
       }

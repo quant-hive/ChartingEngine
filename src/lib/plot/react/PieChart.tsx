@@ -16,6 +16,7 @@ export interface PieChartProps {
   className?: string;
   showLegend?: boolean;
   lightTheme?: boolean;
+  animate?: boolean;
 }
 
 const DEFAULT_SIZE = 240;
@@ -92,26 +93,16 @@ export default function PieChart({
   className,
   showLegend = true,
   lightTheme = false,
+  animate = true,
 }: PieChartProps) {
   const ref = useRef<SVGSVGElement>(null);
-  const [visible, setVisible] = useState(false);
+  const [visible, setVisible] = useState(!animate);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setVisible(true);
-          obs.disconnect();
-        }
-      },
-      { threshold: 0.2 }
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
+    if (!animate) return;
+    requestAnimationFrame(() => setVisible(true));
+  }, [animate]);
 
   const total = data.reduce((s, d) => s + d.value, 0);
   if (total === 0) return null;
@@ -220,7 +211,7 @@ export default function PieChart({
           dominantBaseline="central"
           fill="#ffffff"
           fontSize={11}
-          fontFamily="'Inter', sans-serif"
+          fontFamily="var(--font-eb-garamond), 'EB Garamond', 'Times New Roman', Georgia, serif"
           fontWeight={500}
           opacity={visible ? 1 : 0}
           style={{ transition: `opacity 0.6s ease 0.4s` }}
@@ -244,7 +235,7 @@ export default function PieChart({
               dominantBaseline="central"
               fill="#121212"
               fontSize={10}
-              fontFamily="'Inter', sans-serif"
+              fontFamily="var(--font-eb-garamond), 'EB Garamond', 'Times New Roman', Georgia, serif"
               fontWeight={600}
               opacity={visible ? 1 : 0}
               style={{
@@ -286,7 +277,7 @@ export default function PieChart({
               dominantBaseline="central"
               fill="#8f8f8f"
               fontSize={11}
-              fontFamily="'Inter', sans-serif"
+              fontFamily="var(--font-eb-garamond), 'EB Garamond', 'Times New Roman', Georgia, serif"
               fontWeight={isHovered ? 500 : 400}
               style={{ transition: "font-weight 0.2s" }}
             >
@@ -299,7 +290,7 @@ export default function PieChart({
               dominantBaseline="central"
               fill={isHovered ? "#ffffff" : "#555555"}
               fontSize={11}
-              fontFamily="'Inter', sans-serif"
+              fontFamily="var(--font-eb-garamond), 'EB Garamond', 'Times New Roman', Georgia, serif"
               fontWeight={500}
               style={{ transition: "fill 0.2s" }}
             >

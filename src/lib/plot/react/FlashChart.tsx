@@ -11,7 +11,6 @@ import type {
   Scene, SubplotScene,
   LinePlotElement, AreaPlotElement, BarPlotElement, BarRect, ScatterPlotElement,
   HLinePlotElement, VLinePlotElement, TextPlotElement, AnnotationPlotElement,
-  HeatmapPlotElement,
   Theme, BarThemeStyle,
 } from "../core/types";
 import { getTheme } from "../core/theme";
@@ -169,8 +168,7 @@ const FP_CSS = `
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function fmtVal(v: number | null): string {
-  if (v == null) return "—";
+function fmtVal(v: number): string {
   if (Math.abs(v) >= 1e6) return v.toExponential(2);
   if (Math.abs(v) >= 100) return v.toLocaleString("en-US", { maximumFractionDigits: 0 });
   if (Math.abs(v) >= 1) return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -245,22 +243,16 @@ function LineHoverOverlay({ subplot, uid }: { subplot: SubplotScene; uid: string
   return (
     <>
       {Array.from({ length: nPoints }, (_, i) => {
-        const pt0 = lineEls[0].points[i];
-        if (pt0 == null) return null;
-        const px = pt0.x;
+        const px = lineEls[0].points[i].x;
 
-        // Strip boundaries — find nearest non-null neighbors
+        // Strip boundaries
         let stripL: number, stripR: number;
         if (nPoints === 1) {
           stripL = pa.x;
           stripR = pa.x + pa.w;
         } else {
-          let prevX = pa.x;
-          for (let j = i - 1; j >= 0; j--) { const p = lineEls[0].points[j]; if (p != null) { prevX = p.x; break; } }
-          let nextX = pa.x + pa.w;
-          for (let j = i + 1; j < nPoints; j++) { const p = lineEls[0].points[j]; if (p != null) { nextX = p.x; break; } }
-          stripL = i > 0 ? px - (px - prevX) / 2 : pa.x;
-          stripR = i < nPoints - 1 ? px + (nextX - px) / 2 : pa.x + pa.w;
+          stripL = i > 0 ? px - (px - lineEls[0].points[i - 1].x) / 2 : pa.x;
+          stripR = i < nPoints - 1 ? px + (lineEls[0].points[i + 1].x - px) / 2 : pa.x + pa.w;
         }
 
         // Find closest tick label
@@ -275,9 +267,7 @@ function LineHoverOverlay({ subplot, uid }: { subplot: SubplotScene; uid: string
         const entries: { color: string; label: string; valueStr: string }[] = [];
         for (const el of lineEls) {
           if (el.dataValues && i < el.dataValues.length) {
-            const val = el.dataValues[i];
-            if (val == null) continue;
-            entries.push({ color: el.color, label: el.label ?? el.color, valueStr: fmtVal(val) });
+            entries.push({ color: el.color, label: el.label ?? el.color, valueStr: fmtVal(el.dataValues[i]) });
           }
         }
 
@@ -291,9 +281,7 @@ function LineHoverOverlay({ subplot, uid }: { subplot: SubplotScene; uid: string
               {/* Dots on each line */}
               {lineEls.map((el, elIdx) => {
                 if (i >= el.points.length) return null;
-                const pt = el.points[i];
-                if (pt == null) return null;
-                const py = pt.y;
+                const py = el.points[i].y;
                 return (
                   <g key={`dot-${elIdx}`}>
                     <circle cx={px} cy={py} r={3.5} fill="#121212" stroke={el.color} strokeWidth={1.2} />
@@ -345,9 +333,9 @@ function ScatterHoverOverlay({ subplot, uid }: { subplot: SubplotScene; uid: str
 
 // ── Subplot Renderer ────────────────────────────────────────────────────
 
-function SubplotRenderer({ subplot, theme }: { subplot: SubplotScene; theme: Theme }) {
+function SubplotRenderer({ subplot, theme, sceneWidth, animate = true }: { subplot: SubplotScene; theme: Theme; sceneWidth?: number; animate?: boolean }) {
   const ref = useRef<SVGSVGElement>(null);
-  const [visible, setVisible] = useState(false);
+  const [visible, setVisible] = useState(!animate);
   const [hoveredSeg, setHoveredSeg] = useState<string | null>(null);
   const [hoveredBar, setHoveredBar] = useState<string | null>(null);
 
@@ -356,20 +344,9 @@ function SubplotRenderer({ subplot, theme }: { subplot: SubplotScene; theme: The
   const barTipData: BarTipInfo[] = [];
 
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setVisible(true);
-          obs.disconnect();
-        }
-      },
-      { threshold: 0.15 },
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
+    if (!animate) return;
+    requestAnimationFrame(() => setVisible(true));
+  }, [animate]);
 
   const pa = subplot.plotArea;
   const w = subplot.bounds.w;
@@ -411,13 +388,32 @@ function SubplotRenderer({ subplot, theme }: { subplot: SubplotScene; theme: The
     (el) => el.bars.length > 0 && Math.abs(el.bars[0].x - barElements[0].bars[0].x) < 1
   );
 
+  // Force uniform bar widths across all grouped (non-stacked) series
+  if (barElements.length > 1 && !isStackedBars) {
+    const allW = barElements.flatMap(el => el.bars.map(b => b.width));
+    const minW = Math.min(...allW);
+    const maxW = Math.max(...allW);
+    if (maxW - minW > 0.5) {
+      for (const el of barElements) {
+        for (const bar of el.bars) {
+          if (bar.width !== minW) {
+            const diff = bar.width - minW;
+            bar.x += diff / 2;
+            bar.width = minW;
+          }
+        }
+      }
+    }
+  }
+
   // Calculate extra height for legend
   const hasLegend = !!(subplot.legend && subplot.legend.entries.length > 0);
   const legendFontSize = Math.round(theme.legend.fontSize * (w / 595));
   const legendExtraH = hasLegend ? legendFontSize + 72 : 0;
   const totalH = h + legendExtraH;
 
-  const aspectPct = (totalH / w) * 100;
+  const vbWidth = sceneWidth ?? w;
+  const aspectPct = (totalH / vbWidth) * 100;
 
   // ── Scrollable bar detection ──────────────────────────────────────
   const MAX_VISIBLE_BARS = 12;
@@ -434,19 +430,6 @@ function SubplotRenderer({ subplot, theme }: { subplot: SubplotScene; theme: The
   const mapBarX = (x: number) => needsScroll ? pa.x + (x - pa.x) * scrollRatio - scrollX : x;
   const mapBarW = (bw: number) => needsScroll ? bw * scrollRatio : bw;
 
-  // Wheel handler for horizontal scroll (converts pixel delta → SVG units)
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    if (!needsScroll) return;
-    e.preventDefault();
-    const container = wrapperRef.current;
-    if (!container) return;
-    const pxW = container.clientWidth;
-    const svgToPixRatio = pxW / w;
-    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-    const svgDelta = delta / svgToPixRatio;
-    setScrollX(prev => Math.max(0, Math.min(maxScrollSvg, prev + svgDelta * 1.5)));
-  }, [needsScroll, maxScrollSvg, w]);
-
   // Arrow scroll step
   const scrollStep = useCallback((dir: 1 | -1) => {
     const step = pa.w * 0.6;
@@ -456,10 +439,53 @@ function SubplotRenderer({ subplot, theme }: { subplot: SubplotScene; theme: The
   const showLeftArrow = needsScroll && scrollX > 2;
   const showRightArrow = needsScroll && scrollX < maxScrollSvg - 2;
 
+  // ── Y-axis zoom for bar charts ───────────────────────────────────
+  const [yZoom, setYZoom] = useState(1);
+  const hasBars = barElements.length > 0 && !isStackedBars;
+
+  // Collect all bar values to determine the original data range
+  const allBarValues = hasBars
+    ? barElements.flatMap(el => el.bars.map(b => b.value)).filter(v => v > 0)
+    : [];
+  const origYMax = allBarValues.length > 0 ? Math.max(...allBarValues) : 0;
+
+  // Zoomed Y-axis max: shrinks as zoom increases, showing lower values in detail
+  const zoomedYMax = origYMax > 0 ? origYMax / yZoom : 0;
+  const canZoomY = hasBars && origYMax > 0;
+  const baseline = pa.y + pa.h;
+
+  // Map a bar value → pixel y and height under current zoom
+  const mapBarY = useCallback((value: number) => {
+    if (!canZoomY || zoomedYMax <= 0) return { y: 0, h: 0 };
+    const ratio = Math.min(value / zoomedYMax, 1);
+    const barH = Math.max(ratio > 0 ? 3 : 0, ratio * pa.h);
+    return { y: baseline - barH, h: barH };
+  }, [canZoomY, zoomedYMax, pa.h, baseline]);
+
+  // Generate Y-axis ticks for the zoomed range
+  const zoomedYTicks = (() => {
+    if (!canZoomY || yZoom <= 1) return null;
+    const nTicks = 5;
+    const step = zoomedYMax / (nTicks - 1);
+    return Array.from({ length: nTicks }, (_, i) => {
+      const val = Math.round(i * step);
+      const pos = baseline - (val / zoomedYMax) * pa.h;
+      return { value: val, label: String(val), position: pos };
+    });
+  })();
+
+  // Zoomed Y grid lines
+  const zoomedYGridLines = (() => {
+    if (!zoomedYTicks) return null;
+    return zoomedYTicks.map(t => ({
+      x1: pa.x, y1: t.position, x2: pa.x + pa.w, y2: t.position,
+    }));
+  })();
+
   const svgElement = (
     <svg
       ref={ref}
-      viewBox={`0 0 ${w.toFixed(1)} ${totalH.toFixed(1)}`}
+      viewBox={`0 0 ${(sceneWidth ?? w).toFixed(1)} ${totalH.toFixed(1)}`}
       className="block"
       style={{ fontFamily: "'Inter', sans-serif", position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
     >
@@ -481,6 +507,13 @@ function SubplotRenderer({ subplot, theme }: { subplot: SubplotScene; theme: The
         {needsScroll && (
           <clipPath id={`barScrollClip-${uid}`}>
             <rect x={pa.x} y={0} width={pa.w} height={totalH} />
+          </clipPath>
+        )}
+
+        {/* Bar clip: clips bars to plot area (used when zoomed or scrolling) */}
+        {(needsScroll || canZoomY) && (
+          <clipPath id={`barClip-${uid}`}>
+            <rect x={needsScroll ? pa.x : 0} y={pa.y} width={needsScroll ? pa.w : w} height={pa.h} />
           </clipPath>
         )}
 
@@ -568,41 +601,64 @@ function SubplotRenderer({ subplot, theme }: { subplot: SubplotScene; theme: The
       })()}
 
       {/* ── Grid ─────────────────────────────────────────────────────── */}
-      {subplot.grid.visible && subplot.grid.lines.map((gl, i) => {
-        const len = Math.sqrt((gl.x2 - gl.x1) ** 2 + (gl.y2 - gl.y1) ** 2);
-        return (
-          <line
-            key={`g-${i}`}
-            x1={gl.x1.toFixed(1)} y1={gl.y1.toFixed(1)} x2={gl.x2.toFixed(1)} y2={gl.y2.toFixed(1)}
-            stroke={gl.color}
-            strokeWidth={gl.width}
-            style={visible ? {
-              "--fp-len": len,
-              strokeDasharray: len,
-              animation: `fp-gridDraw 0.675s cubic-bezier(0.22,1,0.36,1) ${(i * 0.08).toFixed(2)}s both`,
-            } as React.CSSProperties : { opacity: 0 }}
-          />
-        );
-      })}
+      {subplot.grid.visible && (() => {
+        if (zoomedYGridLines) {
+          const xGridLines = subplot.grid.lines.filter(gl => Math.abs(gl.x1 - gl.x2) < 0.5);
+          const allLines = [
+            ...xGridLines.map((gl, i) => ({ ...gl, key: `gx-${i}` })),
+            ...zoomedYGridLines.map((gl, i) => ({
+              x1: gl.x1, y1: gl.y1, x2: gl.x2, y2: gl.y1,
+              color: "#2a2a2a", width: 0.3, key: `gy-${i}`,
+            })),
+          ];
+          return allLines.map((gl) => {
+            const len = Math.sqrt((gl.x2 - gl.x1) ** 2 + ((gl as { y2: number }).y2 - gl.y1) ** 2);
+            return (
+              <line key={gl.key}
+                x1={gl.x1.toFixed(1)} y1={gl.y1.toFixed(1)} x2={gl.x2.toFixed(1)} y2={(gl as { y2: number }).y2.toFixed(1)}
+                stroke={gl.color} strokeWidth={gl.width}
+                style={{ transition: "y1 0.25s ease, y2 0.25s ease", opacity: visible ? 1 : 0 }}
+              />
+            );
+          });
+        }
+        return subplot.grid.lines.map((gl, i) => {
+          const len = Math.sqrt((gl.x2 - gl.x1) ** 2 + (gl.y2 - gl.y1) ** 2);
+          return (
+            <line key={`g-${i}`}
+              x1={gl.x1.toFixed(1)} y1={gl.y1.toFixed(1)} x2={gl.x2.toFixed(1)} y2={gl.y2.toFixed(1)}
+              stroke={gl.color} strokeWidth={gl.width}
+              style={visible ? {
+                "--fp-len": len, strokeDasharray: len,
+                animation: `fp-gridDraw 0.675s cubic-bezier(0.22,1,0.36,1) ${(i * 0.08).toFixed(2)}s both`,
+              } as React.CSSProperties : { opacity: 0 }}
+            />
+          );
+        });
+      })()}
 
       {/* ── Y Axis Labels (with shimmer) ─────────────────────────────── */}
-      {subplot.yAxis.ticks.map((t, i) => {
+      {(zoomedYTicks ?? subplot.yAxis.ticks).map((t, i) => {
         const ts = subplot.yAxis.tickStyle;
+        const isZoomed = !!zoomedYTicks;
         const fadeDelay = T_LABELS + i * 0.04;
         const shimmerDelay = T_SHIMMER + i * SHIMMER_STEP;
         return (
           <text
             key={`y-${i}`}
             className="fp-tick-label"
-            x={(pa.x - 4).toFixed(1)} y={(t.position + 3).toFixed(1)}
-            textAnchor="end"
+            x="2" y={(t.position + 3).toFixed(1)}
+            textAnchor="start"
             fontSize={ts.fontSize} fontWeight={ts.fontWeight} fontFamily={ts.fontFamily}
             letterSpacing={ts.letterSpacing}
             fill={ts.color}
-            style={visible ? {
-              "--fp-base": ts.color,
-              animation: `fp-labelFadeY 0.35s ease ${fadeDelay.toFixed(2)}s both, fp-shimmer ${SHIMMER_DUR}s ease ${shimmerDelay.toFixed(2)}s 1`,
-            } as React.CSSProperties : { opacity: 0 }}
+            style={isZoomed
+              ? { transition: "y 0.25s ease", opacity: visible ? 1 : 0 } as React.CSSProperties
+              : visible ? {
+                "--fp-base": ts.color,
+                animation: `fp-labelFadeY 0.35s ease ${fadeDelay.toFixed(2)}s both, fp-shimmer ${SHIMMER_DUR}s ease ${shimmerDelay.toFixed(2)}s 1`,
+              } as React.CSSProperties : { opacity: 0 }
+            }
           >
             {t.label}
           </text>
@@ -828,10 +884,13 @@ function SubplotRenderer({ subplot, theme }: { subplot: SubplotScene; theme: The
           const st = theme.bar.styles[si % theme.bar.styles.length];
 
           return (
-            <g key={`bars-${si}`} clipPath={needsScroll ? `url(#barScrollClip-${uid})` : undefined}>
+            <g key={`bars-${si}`} clipPath={needsScroll || canZoomY ? `url(#barClip-${uid})` : undefined}>
               {barEl.bars.map(bar => {
                 const delay = T_DATA + bar.index * 0.054;
-                const bx = mapBarX(bar.x), bw = mapBarW(bar.width), ay = bar.y, ah = bar.height;
+                const bx = mapBarX(bar.x), bw = mapBarW(bar.width);
+                const zoomed = canZoomY && yZoom > 1 ? mapBarY(bar.value) : null;
+                const ay = zoomed ? zoomed.y : bar.y;
+                const ah = zoomed ? zoomed.h : bar.height;
                 const origin = `${(bx + bw / 2).toFixed(1)}px ${(pa.y + pa.h).toFixed(1)}px`;
                 const growAnim = `fp-barGrow 0.81s cubic-bezier(0.22,1,0.36,1) ${delay.toFixed(2)}s both`;
                 const growStyle = visible
@@ -999,43 +1058,6 @@ function SubplotRenderer({ subplot, theme }: { subplot: SubplotScene; theme: The
           );
         }
 
-        if (el.type === "heatmap") {
-          const hm = el as HeatmapPlotElement;
-          return (
-            <g key={`heatmap-${elIdx}`}
-              style={visible ? { animation: `fp-areaFade 0.8s ease ${T_DATA}s both` } : { opacity: 0 }}>
-              {hm.cells.map((cell, ci) => {
-                // Luminance check for text contrast
-                const hex = cell.color.replace("#", "");
-                const r = parseInt(hex.slice(0, 2), 16), g = parseInt(hex.slice(2, 4), 16), b = parseInt(hex.slice(4, 6), 16);
-                const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-                const textColor = lum > 0.5 ? "#121212" : "#ffffff";
-                const fontSize = Math.max(8, Math.min(cell.w, cell.h) * 0.25);
-                return (
-                  <g key={ci}>
-                    <rect
-                      x={cell.x.toFixed(1)} y={cell.y.toFixed(1)}
-                      width={cell.w.toFixed(1)} height={cell.h.toFixed(1)}
-                      fill={cell.color}
-                    />
-                    <text
-                      x={(cell.x + cell.w / 2).toFixed(1)}
-                      y={(cell.y + cell.h / 2 + fontSize * 0.35).toFixed(1)}
-                      textAnchor="middle"
-                      fontSize={fontSize}
-                      fill={textColor}
-                      fontFamily="'Inter', sans-serif"
-                      fontWeight={500}
-                    >
-                      {cell.value.toFixed(2)}
-                    </text>
-                  </g>
-                );
-              })}
-            </g>
-          );
-        }
-
         return null;
       })}
 
@@ -1129,10 +1151,34 @@ function SubplotRenderer({ subplot, theme }: { subplot: SubplotScene; theme: The
     </svg>
   );
 
+  // Attach native wheel listener with { passive: false } so preventDefault stops page scroll
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el || (!needsScroll && !canZoomY)) return;
+    const handler = (e: WheelEvent) => {
+      if (needsScroll) {
+        e.preventDefault();
+        const pxW = el.clientWidth;
+        const svgToPixRatio = pxW / w;
+        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        const svgDelta = delta / svgToPixRatio;
+        setScrollX(prev => Math.max(0, Math.min(maxScrollSvg, prev + svgDelta * 1.5)));
+      } else if (canZoomY) {
+        e.preventDefault();
+        const delta = e.deltaY;
+        setYZoom(prev => {
+          const factor = delta < 0 ? 1.15 : 1 / 1.15;
+          return Math.max(1, Math.min(100, prev * factor));
+        });
+      }
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [needsScroll, canZoomY, w, maxScrollSvg]);
+
   return (
     <div
       ref={wrapperRef}
-      onWheel={needsScroll ? handleWheel : undefined}
       style={{
         position: "relative",
         width: "100%",
@@ -1142,25 +1188,76 @@ function SubplotRenderer({ subplot, theme }: { subplot: SubplotScene; theme: The
     >
       {svgElement}
 
-      {/* Left arrow indicator */}
-      {needsScroll && (
+      {/* Y-axis zoom controls */}
+      {canZoomY && (
         <div style={{
-          position: "absolute", left: 0, top: 0, bottom: 0,
-          width: 36,
-          pointerEvents: showLeftArrow ? "auto" : "none",
-          opacity: showLeftArrow ? 1 : 0,
-          transition: "opacity 0.3s ease",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          background: "linear-gradient(to right, rgba(18,18,18,0.85), transparent)",
-          cursor: "pointer", zIndex: 2,
+          position: "absolute",
+          right: 6,
+          top: `${((pa.y / totalH) * 100).toFixed(1)}%`,
+          display: "flex", flexDirection: "column", gap: 2,
+          zIndex: 3,
+          opacity: yZoom > 1 ? 1 : 0.4,
+          transition: "opacity 0.2s ease",
         }}
-          onClick={() => scrollStep(-1)}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = "1"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = yZoom > 1 ? "1" : "0.4"; }}
         >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M10 3L5 8L10 13" stroke="#888" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <button onClick={() => setYZoom(prev => Math.min(100, prev * 1.5))}
+            style={{
+              width: 22, height: 22, borderRadius: 4, border: "1px solid #2a2a2a",
+              background: "#1a1a1a", color: "#888", fontSize: 13, lineHeight: "20px",
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+              fontFamily: "'Inter', sans-serif",
+            }}
+          >+</button>
+          <button onClick={() => setYZoom(prev => Math.max(1, prev / 1.5))}
+            style={{
+              width: 22, height: 22, borderRadius: 4, border: "1px solid #2a2a2a",
+              background: "#1a1a1a", color: "#888", fontSize: 13, lineHeight: "20px",
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+              fontFamily: "'Inter', sans-serif",
+            }}
+          >&minus;</button>
+          {yZoom > 1 && (
+            <button onClick={() => setYZoom(1)}
+              style={{
+                width: 22, height: 22, borderRadius: 4, border: "1px solid #2a2a2a",
+                background: "#1a1a1a", color: "#888", fontSize: 8, lineHeight: "20px",
+                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                fontFamily: "'Inter', sans-serif",
+              }}
+              title="Reset zoom"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <path d="M1.5 3.5H4V1M1.5 3.5A3.5 3.5 0 1 1 2.3 6.5" stroke="#888" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+          )}
         </div>
       )}
+
+      {/* Left arrow indicator — starts at plot area left edge (after y-axis labels) */}
+      {needsScroll && (() => {
+        const leftPct = `${((pa.x / w) * 100).toFixed(2)}%`;
+        return (
+          <div style={{
+            position: "absolute", left: leftPct, top: 0, bottom: 0,
+            width: 36,
+            pointerEvents: showLeftArrow ? "auto" : "none",
+            opacity: showLeftArrow ? 1 : 0,
+            transition: "opacity 0.3s ease",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "linear-gradient(to right, rgba(18,18,18,0.85), transparent)",
+            cursor: "pointer", zIndex: 2,
+          }}
+            onClick={() => scrollStep(-1)}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M10 3L5 8L10 13" stroke="#888" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+        );
+      })()}
 
       {/* Right arrow indicator */}
       {needsScroll && (
@@ -1193,13 +1290,14 @@ export interface FlashChartProps {
   animate?: boolean;
 }
 
-export default function FlashChart({ scene, className }: FlashChartProps) {
+export default function FlashChart({ scene, className, animate = true }: FlashChartProps) {
+  if (!scene?.subplots?.length) return null;
   const theme = getTheme(scene.theme);
 
   return (
     <div className={className}>
       {scene.subplots.map((subplot, i) => (
-        <SubplotRenderer key={i} subplot={subplot} theme={theme} />
+        <SubplotRenderer key={i} subplot={subplot} theme={theme} sceneWidth={scene.width} animate={animate} />
       ))}
     </div>
   );

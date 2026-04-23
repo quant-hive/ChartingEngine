@@ -5,6 +5,9 @@ import { createPortal } from "react-dom";
 import { fetchGraphData, type GraphApiResponse } from "./graphApi";
 import { FlashChart, renderChart, type ChartSpec, PieChart, extractPieSlices, Surface3D, type SurfaceMode, CandlestickChart, extractCandlestickData } from "./plot";
 import { FLASH_DARK } from "./plot/core";
+import { createChart, getBacktestCharts } from "./api";
+
+const CHART_FONT = "var(--font-eb-garamond), 'EB Garamond', 'Times New Roman', Georgia, serif";
 
 // ── Chart Types (backward compat) ────────────────────────────────────────
 
@@ -89,6 +92,251 @@ export function apiToChartConfig(api: GraphApiResponse): ChartConfig {
     yStep,
     series: api.series,
   };
+}
+
+// ── Sanitize backend-generated Scene for FlashChart ─────────────────────
+// The backend produces Scene JSON with raw numeric x-axis ticks (0,1,2,...1211)
+// which overwhelms the renderer. This function downsamples x-axis ticks to
+// ~8 period labels and removes x-axis grid lines for clean rendering.
+
+function realignLineElements(subplot: Record<string, unknown>): void {
+  const plotArea = subplot.plotArea as { x?: number; y?: number; w?: number; h?: number } | undefined;
+  const yAxis = subplot.yAxis as { min?: number; max?: number; scale?: string } | undefined;
+  const elements = subplot.elements as Record<string, unknown>[] | undefined;
+  if (!plotArea?.w || !plotArea?.h || !elements?.length) return;
+
+  const paX = plotArea.x ?? 0;
+  const paY = plotArea.y ?? 0;
+  const paW = plotArea.w;
+  const paH = plotArea.h;
+
+  for (const el of elements) {
+    if (el.type !== "line" && el.type !== "area") continue;
+    const dataValues = el.dataValues as number[] | undefined;
+    if (!dataValues?.length || dataValues.length < 2) continue;
+
+    const yMin = yAxis?.min ?? Math.min(...dataValues);
+    const yMax = yAxis?.max ?? Math.max(...dataValues);
+    const yRange = yMax - yMin || 1;
+
+    const n = dataValues.length;
+    const points: { x: number; y: number }[] = [];
+    for (let i = 0; i < n; i++) {
+      const x = paX + (i / (n - 1)) * paW;
+      const y = paY + paH - ((dataValues[i] - yMin) / yRange) * paH;
+      points.push({ x, y });
+    }
+
+    el.points = points;
+    if (el.type === "line") {
+      el.path = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    } else if (el.type === "area") {
+      const baseY = paY + paH;
+      const linePart = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+      el.path = `${linePart} L${points[n - 1].x.toFixed(1)},${baseY.toFixed(1)} L${points[0].x.toFixed(1)},${baseY.toFixed(1)} Z`;
+    }
+  }
+}
+
+export function sanitizeApiScene(scene: Record<string, unknown>): Record<string, unknown> {
+  if (!scene?.subplots || !Array.isArray(scene.subplots)) return scene;
+
+  const sanitized = JSON.parse(JSON.stringify(scene));
+
+  for (const subplot of sanitized.subplots as Record<string, unknown>[]) {
+    realignLineElements(subplot);
+
+    const xAxis = subplot.xAxis as { ticks?: { value: number; label: string; position: number }[]; min?: number; max?: number; range?: number } | undefined;
+    const yAxis = subplot.yAxis as { ticks?: { value: number; label: string; position: number }[]; min?: number; max?: number; range?: number } | undefined;
+    const plotArea = subplot.plotArea as { x?: number; y?: number; w?: number; h?: number } | undefined;
+    const elements = subplot.elements as Record<string, unknown>[] | undefined;
+
+    // ── X-axis tick thinning (only when > 10 ticks) ──
+    if (xAxis?.ticks && xAxis.ticks.length > 10) {
+      const ticks = xAxis.ticks;
+      const maxTicks = 8;
+
+      const allNumeric = ticks.every((t) => /^\d+(\.\d+)?$/.test(t.label));
+
+      if (allNumeric && ticks.length > maxTicks) {
+        const total = ticks.length;
+        const step = Math.max(1, Math.floor(total / maxTicks));
+        const picked: typeof ticks = [];
+        for (let i = 0; i < total; i += step) {
+          const t = ticks[i];
+          const idx = Math.round(t.value);
+          let label: string;
+          if (total > 500) {
+            const yearsFromStart = idx / 252;
+            if (yearsFromStart < 0.1) label = "Start";
+            else label = `Y${yearsFromStart.toFixed(1)}`;
+          } else if (total > 60) {
+            label = `M${idx}`;
+          } else {
+            label = `${idx}`;
+          }
+          picked.push({ ...t, label });
+        }
+        if (picked.length > 0 && picked[picked.length - 1] !== ticks[total - 1]) {
+          const last = ticks[total - 1];
+          const idx = Math.round(last.value);
+          const yearsFromStart = idx / 252;
+          const label = total > 500 ? `Y${yearsFromStart.toFixed(1)}` : `${idx}`;
+          picked.push({ ...last, label });
+        }
+        xAxis.ticks = picked;
+      } else if (!allNumeric && ticks.length > maxTicks) {
+        const step = Math.max(1, Math.floor(ticks.length / maxTicks));
+        const picked: typeof ticks = [];
+        for (let i = 0; i < ticks.length; i += step) {
+          picked.push(ticks[i]);
+        }
+        if (picked[picked.length - 1] !== ticks[ticks.length - 1]) {
+          picked.push(ticks[ticks.length - 1]);
+        }
+        xAxis.ticks = picked;
+      }
+
+      const grid = subplot.grid as { lines?: { x1: number; x2: number }[]; axis?: string } | undefined;
+      if (grid?.lines && grid.axis !== "y") {
+        const xGridLines = grid.lines.filter((l) => l.x1 === l.x2);
+        if (xGridLines.length > 10) {
+          const yGridLines = grid.lines.filter((l) => l.x1 !== l.x2);
+          const xStep = Math.max(1, Math.floor(xGridLines.length / maxTicks));
+          const thinned = xGridLines.filter((_, i) => i % xStep === 0);
+          grid.lines = [...yGridLines, ...thinned];
+        }
+      }
+    }
+
+    // ── Element processing: line widths, bar sizing, histogram Y-rescale ──
+    if (elements && plotArea?.w && plotArea?.h) {
+      type BarItem = { width?: number; x?: number; height?: number; y?: number; value?: number };
+      const barEntries: { el: Record<string, unknown>; bars: BarItem[]; isHistogram: boolean }[] = [];
+
+      for (const el of elements) {
+        if (el.type === "line" && typeof el.lineWidth === "number") {
+          el.lineWidth = Math.max(0.5, el.lineWidth * 0.6);
+        }
+        if (el.type === "bar") {
+          const bars = el.bars as BarItem[] | undefined;
+          if (!bars?.length) continue;
+          const isHistogram = bars.length > 10 && bars.every((b) =>
+            typeof b.width === "number" && Math.abs(b.width - (bars[0].width ?? 0)) < 1
+          );
+          barEntries.push({ el, bars, isHistogram });
+        }
+      }
+
+      // Normalize widths: ALL non-histogram bar series must share one width
+      const grouped = barEntries.filter(b => !b.isHistogram);
+      if (grouped.length > 1) {
+        const allWidths = grouped.flatMap(b => b.bars.map(bar => bar.width ?? 0)).filter(w => w > 0);
+        if (allWidths.length > 0) {
+          const uniformW = Math.min(...allWidths);
+          for (const { bars } of grouped) {
+            for (const bar of bars) {
+              if (typeof bar.width === "number" && bar.width !== uniformW) {
+                const oldW = bar.width;
+                bar.width = uniformW;
+                if (typeof bar.x === "number") {
+                  bar.x += (oldW - uniformW) / 2;
+                }
+              }
+            }
+          }
+        }
+      } else if (grouped.length === 1) {
+        const { bars } = grouped[0];
+        const groupW = plotArea.w / bars.length;
+        const autoW = Math.min(60, Math.max(4, groupW * 0.6));
+        for (const bar of bars) {
+          if (typeof bar.width === "number") {
+            const oldW = bar.width;
+            bar.width = autoW;
+            if (typeof bar.x === "number") {
+              bar.x += (oldW - autoW) / 2;
+            }
+          }
+        }
+      }
+
+      for (const { bars, isHistogram } of barEntries) {
+          // Smart Y-axis rescale for skewed histograms:
+          // If the tallest bar is >5x the second tallest, cap the Y-axis to
+          // make small bars visible — the outlier bar extends above with a
+          // clipped indicator.
+          if (isHistogram && yAxis?.ticks) {
+            const values = bars.map((b) => b.value ?? 0).filter((v) => v > 0);
+            if (values.length >= 2) {
+              const sorted = [...values].sort((a, b) => b - a);
+              const maxVal = sorted[0];
+              const secondMax = sorted[1];
+              const skewRatio = maxVal / Math.max(1, secondMax);
+
+              if (skewRatio > 5) {
+                // Cap Y-axis at ~2x the second-tallest value so small bars become visible
+                const capVal = Math.ceil(secondMax * 2.5);
+                const paY = plotArea.y ?? 0;
+                const paH = plotArea.h;
+                const baseline = paY + paH;
+
+                for (const bar of bars) {
+                  const v = bar.value ?? 0;
+                  if (v <= 0) continue;
+                  const ratio = Math.min(v, capVal) / capVal;
+                  bar.height = Math.max(4, ratio * paH);
+                  bar.y = baseline - bar.height;
+                }
+
+                // Regenerate Y-axis ticks for the capped range
+                const nTicks = 5;
+                const tickStep = capVal / (nTicks - 1);
+                const newTicks: typeof yAxis.ticks = [];
+                for (let i = 0; i < nTicks; i++) {
+                  const val = Math.round(i * tickStep);
+                  const pos = baseline - (val / capVal) * paH;
+                  newTicks.push({ value: val, label: String(val), position: pos });
+                }
+                yAxis.ticks = newTicks;
+                yAxis.max = capVal;
+                if (yAxis.range !== undefined) yAxis.range = capVal - (yAxis.min ?? 0);
+
+                // Regenerate horizontal grid lines to match new ticks
+                const grid = subplot.grid as { lines?: { x1: number; y1: number; x2: number; y2: number; color: string; width: number }[]; visible?: boolean; axis?: string } | undefined;
+                if (grid?.lines) {
+                  const xGridLines = grid.lines.filter((l) => l.x1 === l.x2);
+                  const paX = plotArea.x ?? 0;
+                  const newYLines = newTicks.map((t) => ({
+                    x1: paX, y1: t.position, x2: paX + (plotArea.w ?? 0), y2: t.position,
+                    color: "#2a2a2a", width: 0.3,
+                  }));
+                  grid.lines = [...xGridLines, ...newYLines];
+                }
+
+                // Mark the subplot so FlashChart knows it has a capped Y-axis
+                (subplot as Record<string, unknown>)._yCapValue = capVal;
+                (subplot as Record<string, unknown>)._yMaxValue = maxVal;
+              }
+            }
+          }
+
+          // Ensure non-zero bars have a minimum visible height
+          const minH = Math.max(4, plotArea.h * 0.02);
+          for (const bar of bars) {
+            if (typeof bar.height === "number" && bar.height > 0 && bar.height < minH) {
+              const oldH = bar.height;
+              bar.height = minH;
+              if (typeof bar.y === "number") {
+                bar.y -= (minH - oldH);
+              }
+            }
+          }
+      }
+    }
+  }
+
+  return sanitized;
 }
 
 // ── Legacy mock data (used by ResponseExpanded) ─────────────────────────
@@ -201,7 +449,7 @@ function ChartLegend({ series, chartType }: { series: ChartSeries[]; chartType: 
               />
               <span
                 className="text-white text-[13px]"
-                style={{ fontFamily: "var(--font-instrument-serif), 'Instrument Serif', serif" }}
+                style={{ fontFamily: CHART_FONT }}
               >
                 {s.label}
               </span>
@@ -219,7 +467,7 @@ function ChartLegend({ series, chartType }: { series: ChartSeries[]; chartType: 
           <span className="w-[10px] h-[2px] rounded-full" style={{ backgroundColor: s.color }} />
           <span
             className="text-[#494949] text-[11px]"
-            style={{ fontFamily: "'Inter', sans-serif" }}
+            style={{ fontFamily: CHART_FONT }}
           >
             {s.label}
           </span>
@@ -259,7 +507,7 @@ export function ChartCard({ config, chartType = "line" }: { config: ChartConfig;
         <ChartSettingsDropdown settings={chartSettings} onChange={setChartSettings} />
       </div>
       <ChartHeader title={baseSpec.title} subtitle={baseSpec.subtitle} />
-      <div className={`w-full ${innerCls}`} key={`${config.title}-${chartType}`}>
+      <div className={`w-full ${innerCls}`} key={`${config.title}-${chartType}-${chartSettings.theme}-${chartSettings.gridLines}-${chartSettings.axisLabels}-${chartSettings.legend}`}>
         <FlashChart scene={scene} />
       </div>
     </div>
@@ -363,7 +611,7 @@ export function ChartSettingsDropdown({
         right: panelPos.right,
         zIndex: 9999,
         boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
-        fontFamily: "'Inter', sans-serif",
+        fontFamily: CHART_FONT,
         animation: closing
           ? "graphSelectorOut 0.15s ease forwards"
           : "graphSelectorIn 0.2s cubic-bezier(0.22,1,0.36,1) forwards",
@@ -434,6 +682,303 @@ export function ChartSettingsDropdown({
 
       {typeof document !== "undefined" && createPortal(panelContent, document.body)}
     </>
+  );
+}
+
+// ── Monthly Returns Heatmap ──────────────────────────────────────────────
+
+export interface MonthlyReturnsEntry {
+  year: number;
+  months: (number | null)[];
+}
+
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function tryParseMonthlyGrid(obj: Record<string, unknown>): MonthlyReturnsEntry[] | null {
+  // Shape A: { rowLabels: ["2020",...], values: [[...12 nums...], ...] }
+  if (Array.isArray(obj.values) && Array.isArray(obj.rowLabels)) {
+    return (obj.rowLabels as string[]).map((yr, i) => ({
+      year: parseInt(yr),
+      months: ((obj.values as number[][])[i] ?? Array(12).fill(null)),
+    }));
+  }
+  // Shape B: { rows: ["2020",...], values: [[...]] }
+  if (Array.isArray(obj.values) && Array.isArray(obj.rows)) {
+    return (obj.rows as string[]).map((yr, i) => ({
+      year: parseInt(yr),
+      months: ((obj.values as number[][])[i] ?? Array(12).fill(null)),
+    }));
+  }
+  // Shape C: { years: [2020,...], months: [[...12 per year...]] }
+  if (Array.isArray(obj.years) && Array.isArray(obj.months)) {
+    return (obj.years as number[]).map((yr, i) => ({
+      year: yr,
+      months: ((obj.months as number[][])[i] ?? Array(12).fill(null)),
+    }));
+  }
+  // Shape D: { data: [[...12 per year...]], rowLabels/rows, colLabels/cols }
+  const inner = obj.data as Record<string, unknown> | undefined;
+  if (inner && (Array.isArray(inner.rowLabels) || Array.isArray(inner.rows)) && Array.isArray(inner.values)) {
+    return tryParseMonthlyGrid(inner);
+  }
+  return null;
+}
+
+function extractMonthlyReturnsData(scene: Record<string, unknown>): MonthlyReturnsEntry[] | null {
+  // Format 1: scene.monthly_data = [{ year, months: [v1..v12] }]
+  if (Array.isArray(scene.monthly_data)) {
+    return (scene.monthly_data as Record<string, unknown>[]).map((row) => ({
+      year: Number(row.year),
+      months: (row.months as (number | null)[]) ?? Array(12).fill(null),
+    }));
+  }
+
+  // Format 2: flat grid shapes on scene root
+  const rootTry = tryParseMonthlyGrid(scene);
+  if (rootTry) return rootTry;
+
+  // Format 3: scene.data = grid shape
+  const sceneData = scene.data as Record<string, unknown> | undefined;
+  if (sceneData) {
+    const dataTry = tryParseMonthlyGrid(sceneData);
+    if (dataTry) return dataTry;
+  }
+
+  // Format 4: scan subplot elements for any heatmap/monthly element
+  const subplots = scene.subplots as Record<string, unknown>[] | undefined;
+  if (!subplots?.length) return null;
+
+  for (const sp of subplots) {
+    // Check subplot-level data fields
+    const spTry = tryParseMonthlyGrid(sp);
+    if (spTry) return spTry;
+
+    const els = sp.elements as Record<string, unknown>[] | undefined;
+    if (!els) continue;
+    for (const el of els) {
+      // Try the element directly (element might hold the grid fields at top level)
+      const elTry = tryParseMonthlyGrid(el);
+      if (elTry) return elTry;
+
+      // Try el.data sub-object
+      const elData = el.data as Record<string, unknown> | undefined;
+      if (elData) {
+        const elDataTry = tryParseMonthlyGrid(elData);
+        if (elDataTry) return elDataTry;
+      }
+
+      // Try el.cells: { "2020-01": 2.1, "2020-02": -1.3, ... } key-value map
+      const cells = el.cells as Record<string, number> | undefined;
+      if (cells && typeof cells === "object" && !Array.isArray(cells)) {
+        const yearMap: Record<number, (number | null)[]> = {};
+        for (const [k, v] of Object.entries(cells)) {
+          const parts = k.split("-");
+          const yr = parseInt(parts[0]);
+          const mo = parseInt(parts[1]) - 1; // 0-based
+          if (!isNaN(yr) && mo >= 0 && mo < 12) {
+            if (!yearMap[yr]) yearMap[yr] = Array(12).fill(null);
+            yearMap[yr][mo] = v;
+          }
+        }
+        const years = Object.keys(yearMap).map(Number).sort();
+        if (years.length > 0) {
+          return years.map((yr) => ({ year: yr, months: yearMap[yr] }));
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function computeMonthlyFromEquityCurve(scene: Record<string, unknown>, period?: string): MonthlyReturnsEntry[] | null {
+  const subplots = scene?.subplots as Record<string, unknown>[] | undefined;
+  if (!subplots?.length) return null;
+  const sp = subplots[0];
+  const els = sp.elements as Record<string, unknown>[] | undefined;
+  if (!els?.length) return null;
+
+  const lineEl = els.find(el => el.type === "line" && Array.isArray(el.dataValues) && (el.dataValues as number[]).length > 0);
+  if (!lineEl) return null;
+  const values = lineEl.dataValues as number[];
+  if (values.length < 2) return null;
+
+  const xAxis = sp.xAxis as Record<string, unknown> | undefined;
+  const ticks = xAxis?.ticks as { value: number; label: string }[] | undefined;
+
+  let dateForIndex: (i: number) => Date;
+
+  const tickDates: { idx: number; date: Date }[] = [];
+  if (ticks?.length) {
+    for (const t of ticks) {
+      const parsed = new Date(t.label);
+      if (!isNaN(parsed.getTime())) tickDates.push({ idx: Math.round(t.value), date: parsed });
+    }
+  }
+
+  if (tickDates.length >= 2) {
+    tickDates.sort((a, b) => a.idx - b.idx);
+    dateForIndex = (i: number): Date => {
+      if (i <= tickDates[0].idx) return tickDates[0].date;
+      if (i >= tickDates[tickDates.length - 1].idx) return tickDates[tickDates.length - 1].date;
+      for (let t = 0; t < tickDates.length - 1; t++) {
+        const a = tickDates[t], b = tickDates[t + 1];
+        if (i >= a.idx && i <= b.idx) {
+          const frac = (i - a.idx) / (b.idx - a.idx);
+          return new Date(a.date.getTime() + frac * (b.date.getTime() - a.date.getTime()));
+        }
+      }
+      return tickDates[0].date;
+    };
+  } else {
+    // Numeric-index ticks: infer from period or subtitle
+    let startDate: Date | null = null;
+    let endDate: Date | null = null;
+    const periodStr = period || (sp.subtitle as string | undefined);
+    if (periodStr) {
+      const parts = periodStr.split(/\s+to\s+/i);
+      if (parts.length === 2) {
+        const s = new Date(parts[0].trim());
+        const e = new Date(parts[1].trim());
+        if (!isNaN(s.getTime()) && !isNaN(e.getTime())) { startDate = s; endDate = e; }
+      }
+    }
+    if (!startDate || !endDate) return null;
+    const totalMs = endDate.getTime() - startDate.getTime();
+    const n = values.length;
+    dateForIndex = (i: number): Date => new Date(startDate!.getTime() + (i / (n - 1)) * totalMs);
+  }
+
+  const mv: Record<string, { first: number; last: number }> = {};
+  for (let i = 0; i < values.length; i++) {
+    const d = dateForIndex(i);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if (!mv[key]) mv[key] = { first: values[i], last: values[i] };
+    else mv[key].last = values[i];
+  }
+
+  const years = Array.from(new Set(Object.keys(mv).map(k => parseInt(k.split("-")[0])))).sort();
+  if (years.length === 0) return null;
+
+  return years.map(yr => {
+    const months: (number | null)[] = Array(12).fill(null);
+    for (let m = 0; m < 12; m++) {
+      const entry = mv[`${yr}-${m}`];
+      if (entry && entry.first !== 0) {
+        months[m] = parseFloat((((entry.last - entry.first) / entry.first) * 100).toFixed(2));
+      }
+    }
+    return { year: yr, months };
+  });
+}
+
+function monthlyReturnColor(val: number | null, maxAbs: number): string {
+  if (val === null) return "transparent";
+  const intensity = Math.min(Math.abs(val) / Math.max(maxAbs, 0.01), 1);
+  const alpha = 0.12 + intensity * 0.65;
+  return val >= 0
+    ? `rgba(74, 200, 130, ${alpha})`
+    : `rgba(220, 70, 70, ${alpha})`;
+}
+
+export function MonthlyReturnsChart({
+  data,
+  settings,
+}: {
+  data: MonthlyReturnsEntry[];
+  settings: ChartSettings;
+}) {
+  const allVals = data.flatMap((r) => r.months).filter((v): v is number => v !== null);
+  const maxAbs = Math.max(...allVals.map(Math.abs), 1);
+
+  const yearTotal = (row: MonthlyReturnsEntry): number | null => {
+    const valid = row.months.filter((v): v is number => v !== null);
+    return valid.length > 0 ? valid.reduce((s, v) => s + v, 0) : null;
+  };
+
+  const fmt = (v: number | null) =>
+    v === null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+
+  const cellBase: React.CSSProperties = {
+    fontFamily: CHART_FONT,
+    fontSize: 14,
+    textAlign: "center",
+    borderRadius: 3,
+    padding: "5px 4px",
+    minWidth: 54,
+    transition: "background-color 0.15s",
+  };
+
+  if (!settings.axisLabels) {
+    return (
+      <div className="w-full py-4 text-center text-[16px] text-[#505050]" style={{ fontFamily: CHART_FONT }}>
+        Monthly returns hidden (axis labels off)
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full overflow-x-auto hide-scrollbar">
+      <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: "2px 2px" }}>
+        <thead>
+          <tr>
+            <th style={{ fontFamily: CHART_FONT, fontSize: 14, color: "#505050", textAlign: "left", paddingBottom: 8, paddingRight: 12, fontWeight: 400 }}>
+              Year
+            </th>
+            {MONTH_LABELS.map((m) => (
+              <th key={m} style={{ fontFamily: CHART_FONT, fontSize: 14, color: "#505050", textAlign: "center", paddingBottom: 8, fontWeight: 400, minWidth: 54 }}>
+                {m}
+              </th>
+            ))}
+            {settings.legend && (
+              <th style={{ fontFamily: CHART_FONT, fontSize: 14, color: "#505050", textAlign: "center", paddingBottom: 8, fontWeight: 400, minWidth: 58 }}>
+                Total
+              </th>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row) => {
+            const total = yearTotal(row);
+            return (
+              <tr key={row.year}>
+                <td style={{ fontFamily: CHART_FONT, fontSize: 16, color: "#8f8f8f", paddingRight: 12, paddingTop: 1, paddingBottom: 1, fontWeight: 400, whiteSpace: "nowrap" }}>
+                  {row.year}
+                </td>
+                {row.months.map((val, i) => (
+                  <td key={i} style={{ padding: "1px 0" }}>
+                    <div
+                      style={{
+                        ...cellBase,
+                        backgroundColor: monthlyReturnColor(val, maxAbs),
+                        color: val === null ? "#404040" : "#e5e5e5",
+                      }}
+                    >
+                      {fmt(val)}
+                    </div>
+                  </td>
+                ))}
+                {settings.legend && (
+                  <td style={{ padding: "1px 0" }}>
+                    <div
+                      style={{
+                        ...cellBase,
+                        backgroundColor: monthlyReturnColor(total, maxAbs),
+                        color: total === null ? "#404040" : "#f0f0f0",
+                        fontWeight: 500,
+                        minWidth: 58,
+                      }}
+                    >
+                      {fmt(total)}
+                    </div>
+                  </td>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -637,6 +1182,11 @@ const MOCK_CHART_SPECS: Record<string, ChartSpec> = {
       ],
     },
   },
+  // Monthly returns heatmap — rendered as MonthlyReturnsChart (not FlashChart)
+  monthly_returns: {
+    type: "line", // placeholder type; rendering is overridden by chart type check
+    title: "Monthly Returns (%)",
+  },
 };
 
 // Resolve user input like "surface-chart", "stacked bar", "line_chart" → ChartType key
@@ -650,6 +1200,7 @@ function resolveChartType(input: string): string {
     "stacked": "stacked_bar",
     "candle": "candlestick",
     "ohlc": "candlestick",
+    "price": "candlestick",
     "surface3d": "surface_3d",
     "3d": "surface_3d",
     "3dsurface": "surface_3d",
@@ -665,6 +1216,9 @@ function resolveChartType(input: string): string {
     "heat": "heatmap",
     "correlation": "heatmap",
     "fall": "waterfall",
+    "monthly": "monthly_returns",
+    "monthlyreturns": "monthly_returns",
+    "returns": "monthly_returns",
   };
   if (aliases[normalized]) return aliases[normalized];
   // Partial match
@@ -687,7 +1241,7 @@ export function ChartHeader({ title, subtitle }: { title?: string; subtitle?: st
           spellCheck={false}
           className="text-[#e5e5e5] text-[21px] font-normal leading-tight outline-none cursor-text"
           style={{
-            fontFamily: "var(--font-eb-garamond), 'EB Garamond', 'Times New Roman', Georgia, serif",
+            fontFamily: CHART_FONT,
             letterSpacing: "-0.3px",
           }}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
@@ -701,7 +1255,7 @@ export function ChartHeader({ title, subtitle }: { title?: string; subtitle?: st
           suppressContentEditableWarning
           spellCheck={false}
           className="text-[#707070] text-[13px] font-normal mt-0.5 outline-none cursor-text"
-          style={{ fontFamily: "'Inter', sans-serif", letterSpacing: "-0.1px" }}
+          style={{ fontFamily: CHART_FONT, letterSpacing: "-0.1px" }}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
         >
           {subtitle}
@@ -786,10 +1340,10 @@ export function ChartCell({ chartTypeInput }: { chartTypeInput: string }) {
     );
     extraControls = (
       <div className="flex items-center justify-between w-full">
-        <span className="text-[9px] text-[#444]" style={{ fontFamily: "'Inter', sans-serif" }}>
+        <span className="text-[9px] text-[#444]" style={{ fontFamily: CHART_FONT }}>
           {surfaceMode === "3D" ? "drag to rotate · scroll to zoom · double-click to reset" : ""}
         </span>
-        <div className="flex rounded-full overflow-hidden border border-[#2a2a2a]" style={{ fontFamily: "'Inter', sans-serif" }}>
+        <div className="flex rounded-full overflow-hidden border border-[#2a2a2a]" style={{ fontFamily: CHART_FONT }}>
           {(["2D", "3D"] as SurfaceMode[]).map((m) => (
             <button key={m} onClick={() => setSurfaceMode(m)}
               className="px-2.5 py-1 text-[9px] font-medium transition-colors cursor-pointer"
@@ -812,6 +1366,15 @@ export function ChartCell({ chartTypeInput }: { chartTypeInput: string }) {
         />
       );
     }
+  } else if (resolvedType === "monthly_returns") {
+    // Mock monthly returns data for /chart command preview
+    const mockMonthlyData: MonthlyReturnsEntry[] = [
+      { year: 2021, months: [2.1, -1.3, 4.5, 1.8, 3.2, -0.7, 2.9, 1.4, -2.1, 5.6, 3.1, 1.9] },
+      { year: 2022, months: [-3.2, 1.5, -2.8, -4.1, -2.5, -5.2, 4.3, -2.1, -6.2, 4.8, 2.1, -2.9] },
+      { year: 2023, months: [4.2, 1.3, 2.8, 0.9, 1.4, 3.1, 2.5, -1.2, 3.8, -1.5, 4.6, 2.3] },
+      { year: 2024, months: [1.8, 3.4, 2.1, -0.8, 2.6, 1.5, 3.2, -0.5, 1.9, 2.8, -1.1, 2.4] },
+    ];
+    chartBody = <MonthlyReturnsChart data={mockMonthlyData} settings={chartSettings} />;
   } else if (spec.type === "heatmap") {
     const fallbackSpec: ChartSpec = {
       type: "line",
@@ -858,12 +1421,201 @@ export function ChartCell({ chartTypeInput }: { chartTypeInput: string }) {
         <ChartSettingsDropdown settings={chartSettings} onChange={setChartSettings} />
       </div>
       <ChartHeader title={spec.title} subtitle={spec.subtitle} />
-      <div className="w-full">{chartBody}</div>
+      <div className="w-full" key={`cc-${chartSettings.theme}-${chartSettings.gridLines}-${chartSettings.axisLabels}-${chartSettings.legend}`}>{chartBody}</div>
       {extraControls && (
         <div className="flex items-center justify-between pb-2">
           {extraControls}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── API Chart Cell (wraps backend Scene JSON with full chart template) ───
+
+function extractSceneTitle(scene: Record<string, unknown>): { title?: string; subtitle?: string } {
+  const subplots = scene.subplots as Record<string, unknown>[] | undefined;
+  if (!subplots?.length) return {};
+  const first = subplots[0];
+  return {
+    title: first.title as string | undefined,
+    subtitle: first.subtitle as string | undefined,
+  };
+}
+
+function stripSceneTitle(scene: Record<string, unknown>): Record<string, unknown> {
+  const subplots = scene.subplots as Record<string, unknown>[] | undefined;
+  if (!subplots?.length) return scene;
+  return {
+    ...scene,
+    subplots: subplots.map((sp) => ({ ...sp, title: undefined, subtitle: undefined, titleStyle: undefined, subtitleStyle: undefined })),
+  };
+}
+
+function shrinkAxisFonts(scene: Record<string, unknown>): Record<string, unknown> {
+  if (!scene?.subplots || !Array.isArray(scene.subplots)) return scene;
+  const out = JSON.parse(JSON.stringify(scene));
+  for (const sp of out.subplots as Record<string, unknown>[]) {
+    const scale = (axis: Record<string, unknown> | undefined) => {
+      if (!axis) return;
+      const ts = axis.tickStyle as Record<string, unknown> | undefined;
+      if (ts?.fontSize) ts.fontSize = Math.round((ts.fontSize as number) * 0.8);
+    };
+    scale(sp.xAxis as Record<string, unknown> | undefined);
+    scale(sp.yAxis as Record<string, unknown> | undefined);
+  }
+  return out;
+}
+
+export function ApiChartCell({
+  scene: rawScene,
+  title: titleOverride,
+  subtitle: subtitleOverride,
+  compact,
+  chartType: chartTypeHint,
+  backtestId,
+  monthlyData: monthlyDataProp,
+  period,
+}: {
+  scene: Record<string, unknown>;
+  title?: string;
+  subtitle?: string;
+  compact?: boolean;
+  chartType?: string;
+  backtestId?: string;
+  monthlyData?: MonthlyReturnsEntry[];
+  period?: string;
+}) {
+  const [chartSettings, setChartSettings] = useState<ChartSettings>({
+    gridLines: true,
+    axisLabels: true,
+    legend: true,
+    theme: "naked",
+  });
+  const [monthlyData, setMonthlyData] = useState<MonthlyReturnsEntry[] | null>(null);
+  const [monthlyLoading, setMonthlyLoading] = useState(false);
+
+  const sceneTitle = (() => {
+    const sps = rawScene?.subplots as Record<string, unknown>[] | undefined;
+    return sps?.[0]?.title as string | undefined;
+  })();
+
+  const isMonthly =
+    chartTypeHint === "monthly_returns" ||
+    rawScene?.chart_type === "monthly_returns" ||
+    (chartTypeHint === "heatmap" && /monthly\s*return/i.test(sceneTitle || "")) ||
+    (rawScene?.chart_type === "heatmap" && /monthly\s*return/i.test(sceneTitle || "")) ||
+    /monthly\s*return/i.test(sceneTitle || "") ||
+    (Array.isArray(rawScene?.subplots) &&
+      (rawScene.subplots as Record<string, unknown>[]).some(
+        (sp) =>
+          sp.chart_type === "monthly_returns" ||
+          (sp.elements as Record<string, unknown>[] | undefined)?.some(
+            (el) => el.type === "monthly_returns" || el.type === "monthly_table"
+          )
+      ));
+
+  useEffect(() => {
+    if (!isMonthly) return;
+    if (monthlyDataProp?.length) { setMonthlyData(monthlyDataProp); return; }
+    const extracted = extractMonthlyReturnsData(rawScene);
+    if (extracted) { setMonthlyData(extracted); return; }
+    if (!backtestId) return;
+    // Skip refetch if we already have data (from a prior run of this effect)
+    if (monthlyData && !period) return;
+
+    let cancelled = false;
+    setMonthlyLoading(true);
+
+    (async () => {
+      try {
+        const res = await createChart({ chart_type: "monthly_returns", backtest_id: backtestId });
+        if (cancelled) return;
+        if (res.scene) {
+          const fetched = extractMonthlyReturnsData(res.scene as Record<string, unknown>);
+          if (fetched) { setMonthlyData(fetched); return; }
+        }
+        const resAny = res as unknown as Record<string, unknown>;
+        const fromRoot = extractMonthlyReturnsData(resAny);
+        if (fromRoot) { setMonthlyData(fromRoot); return; }
+      } catch { /* continue to fallback */ }
+
+      if (cancelled) return;
+      try {
+        const allCharts = await getBacktestCharts(backtestId);
+        if (cancelled) return;
+        const eqChart = allCharts.find(c => c.chart_type === "equity_curve" && c.scene);
+        if (eqChart?.scene) {
+          const computed = computeMonthlyFromEquityCurve(eqChart.scene as Record<string, unknown>, period);
+          if (computed) { setMonthlyData(computed); return; }
+        }
+      } catch { /* endpoint unavailable */ }
+    })().finally(() => { if (!cancelled) setMonthlyLoading(false); });
+
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMonthly, backtestId, monthlyDataProp, period]);
+
+  if (isMonthly) {
+    const fallbackTitle = titleOverride || (rawScene?.title as string) || "Monthly Returns (%)";
+    const outerCls = chartSettings.theme === "light" ? "fp-light" : "";
+    return (
+      <div
+        className={`w-full relative pt-4 pb-4 px-4 rounded-lg ${outerCls}`}
+        style={{
+          background: chartSettings.theme === "naked" ? "transparent" : chartSettings.theme === "light" ? "#fafafa" : "#121212",
+        }}
+      >
+        <div className="absolute top-4 right-4 z-10">
+          <ChartSettingsDropdown settings={chartSettings} onChange={setChartSettings} />
+        </div>
+        <ChartHeader title={fallbackTitle} />
+        {monthlyLoading ? (
+          <div className="flex items-center gap-2 py-6 text-[11px] text-[#404040]" style={{ fontFamily: CHART_FONT }}>
+            <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+              <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75" />
+            </svg>
+            Loading…
+          </div>
+        ) : monthlyData ? (
+          <MonthlyReturnsChart data={monthlyData} settings={chartSettings} />
+        ) : (
+          <div className="text-[11px] text-[#404040] py-4" style={{ fontFamily: CHART_FONT }}>
+            No monthly return data available.
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (!rawScene || !Array.isArray(rawScene.subplots)) return null;
+
+  const extracted = extractSceneTitle(rawScene);
+  const title = titleOverride || extracted.title;
+  const subtitle = subtitleOverride || extracted.subtitle;
+
+  let sanitized = sanitizeApiScene(rawScene);
+  if (compact) sanitized = shrinkAxisFonts(sanitized);
+  const stripped = stripSceneTitle(sanitized);
+
+  const outerCls = chartSettings.theme === "light" ? "fp-light" : "";
+  const innerCls = chartSettings.axisLabels ? "" : "fp-hide-axis-labels";
+
+  return (
+    <div
+      className={`w-full relative pt-4 pb-4 px-4 rounded-lg ${outerCls}`}
+      style={{
+        background: chartSettings.theme === "naked" ? "transparent" : chartSettings.theme === "light" ? "#fafafa" : "#121212",
+      }}
+    >
+      <div className="absolute top-4 right-4 z-10">
+        <ChartSettingsDropdown settings={chartSettings} onChange={setChartSettings} />
+      </div>
+      <ChartHeader title={title} subtitle={subtitle} />
+      <div className={`w-full ${innerCls}`} key={`fc-${chartSettings.theme}-${chartSettings.gridLines}-${chartSettings.axisLabels}-${chartSettings.legend}`}>
+        <FlashChart scene={stripped as unknown as import("./plot/core/types").Scene} />
+      </div>
     </div>
   );
 }
@@ -922,7 +1674,7 @@ export function GraphCell({ query }: { query?: string }) {
           <div key={config.title} className="w-full">
             <div
               className={`w-full ${chartSettings.axisLabels ? "" : "fp-hide-axis-labels"} ${chartSettings.theme === "light" ? "fp-light" : ""}`}
-              key={`${config.title}-${chartType}`}
+              key={`${config.title}-${chartType}-${chartSettings.theme}-${chartSettings.gridLines}-${chartSettings.axisLabels}-${chartSettings.legend}`}
             >
               <FlashChart scene={scene} />
             </div>

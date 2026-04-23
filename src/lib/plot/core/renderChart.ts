@@ -6,7 +6,7 @@
 // renderChart normalizes the variant into the correct rendering path.
 
 import { figure, Axes } from "./figure";
-import type { Scene, LineStyle } from "./types";
+import type { Scene } from "./types";
 
 // ── All graph types the agent can request ──────────────────────────────
 //
@@ -98,8 +98,8 @@ export const DEFAULT_COLORS = {
 // ── ChartSpec: the JSON schema the agent sends ─────────────────────────
 
 export interface SeriesSpec {
-  /** Y-axis values (close prices for candlestick). null = gap/skip. */
-  data: (number | null)[];
+  /** Y-axis values (close prices for candlestick) */
+  data: number[];
   /** Optional X-axis values (defaults to 0, 1, 2, ...) */
   x?: number[];
   /** Series label for legend */
@@ -175,8 +175,8 @@ export interface HeatmapSpec {
   rowLabels?: string[];
   /** Column labels */
   colLabels?: string[];
-  /** Color range: 2 colors (linear) or 3 colors (diverging: low→mid→high) */
-  colorRange?: string[];
+  /** Color range: [min_color, max_color]. Default: theme heatmap palette */
+  colorRange?: [string, string];
 }
 
 export interface AxisSpec {
@@ -246,8 +246,8 @@ export interface ChartSpec {
   height?: number;
 
   /** Reference lines */
-  hlines?: { y: number; color?: string; label?: string; lineStyle?: LineStyle }[];
-  vlines?: { x: number; color?: string; label?: string; lineStyle?: LineStyle }[];
+  hlines?: { y: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" }[];
+  vlines?: { x: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" }[];
 
   /** Annotations */
   annotations?: { text: string; x: number; y: number; color?: string }[];
@@ -314,16 +314,10 @@ export function renderChart(spec: ChartSpec): Scene {
     case "boxplot":
       _renderBoxplot(ax, spec, palette);
       break;
-    case "heatmap": {
-      const hm = spec.heatmap;
-      if (hm?.data) {
-        const colorRange = hm.colorRange ?? ["#0d47a1", "#ffffff", "#b71c1c"];
-        ax.heatmap(hm.data, { colorRange, rowLabels: hm.rowLabels, colLabels: hm.colLabels });
-        if (hm.colLabels) ax.set_xticks(hm.colLabels);
-        ax.grid(false);
-      }
+    case "heatmap":
+      // Heatmaps rendered as colored rects — use heatmap spec
+      // TODO: implement when Axes gains heatmap support
       break;
-    }
     case "surface":
       // Surface plots use the Python flash-plot renderer (not TS Axes).
       // Use extractSurfaceSpec() to get data for the server route.
@@ -398,7 +392,7 @@ function _renderBar(ax: Axes, spec: ChartSpec, palette: string[], forceStacked?:
     });
     if (isStacked) {
       if (!bottom) bottom = new Array(s.data.length).fill(0);
-      for (let j = 0; j < s.data.length; j++) bottom[j] += s.data[j] ?? 0;
+      for (let j = 0; j < s.data.length; j++) bottom[j] += s.data[j];
     }
   }
 }
@@ -444,7 +438,7 @@ function _renderCandlestick(ax: Axes, spec: ChartSpec, palette: string[]) {
   const open = s.open ?? [];
   const high = s.high ?? [];
   const low = s.low ?? [];
-  const close = (s.close ?? s.data ?? []).filter((v): v is number => v != null);
+  const close = s.close ?? s.data ?? [];
   const n = Math.min(open.length, high.length, low.length, close.length);
   if (n === 0) return;
 
@@ -488,9 +482,9 @@ function _renderWaterfall(ax: Axes, spec: ChartSpec, palette: string[]) {
   let running = 0;
   for (let i = 0; i < data.length; i++) {
     const val = data[i];
-    if (val == null) continue;
     const isTotal = spec.xLabels?.[i]?.toLowerCase() === "total";
     if (isTotal) {
+      // Total bar from 0 to running
       ax.bar([i], [running], { color: totalColor, width: 0.7 });
     } else {
       const bottom = val >= 0 ? running : running + val;
@@ -513,7 +507,7 @@ function _renderViolin(ax: Axes, spec: ChartSpec, palette: string[]) {
   for (let i = 0; i < series.length; i++) {
     const s = series[i];
     const color = s.color ?? palette[i % palette.length];
-    const raw = s.data.filter((v): v is number => v != null);
+    const raw = s.data;
     if (raw.length === 0) continue;
 
     // Compute KDE (Gaussian kernel)
@@ -584,8 +578,8 @@ function _renderBoxplot(ax: Axes, spec: ChartSpec, palette: string[]) {
       wHigh = s.whiskerHigh ?? q3;
       outliers = s.outliers ?? [];
     } else {
-      // Compute from raw data (filter nulls)
-      const sorted = s.data.filter((v): v is number => v != null).sort((a, b) => a - b);
+      // Compute from raw data
+      const sorted = [...s.data].sort((a, b) => a - b);
       const n = sorted.length;
       if (n === 0) continue;
       q1 = sorted[Math.floor(n * 0.25)];
@@ -658,7 +652,7 @@ export function extractCandlestickData(spec: ChartSpec) {
   const open = s.open ?? [];
   const high = s.high ?? [];
   const low = s.low ?? [];
-  const close = (s.close ?? s.data ?? []).filter((v): v is number => v != null);
+  const close = s.close ?? s.data ?? [];
   const n = Math.min(open.length, high.length, low.length, close.length);
   if (n === 0) return null;
   // Extract interval from subtitle (e.g. "4h · Last 12 candles" → "4h")

@@ -31,14 +31,14 @@ export const FLASH_DARK: Theme = {
     color: "#ffffff",
   },
   subtitle: {
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: "var(--font-eb-garamond), 'EB Garamond', 'Times New Roman', Georgia, serif",
     fontSize: 11,
     fontWeight: 400,
     letterSpacing: "-0.1px",
     color: "#555555",
   },
   legend: {
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: "var(--font-eb-garamond), 'EB Garamond', 'Times New Roman', Georgia, serif",
     fontSize: 11,
   },
   tooltip: {
