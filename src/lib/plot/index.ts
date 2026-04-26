@@ -37,7 +37,12 @@ export type {
   TextStyle,
   Theme, BarThemeStyle,
   FigureConfig,
+  EdgeDistributionScene, EdgeDistributionBar, EdgeDistributionAnnotation,
 } from "./core";
+
+// Validator
+export { validateChartSpec, ChartSpecSchema, HEX_COLOR_REGEX, CHART_TYPES } from "./core";
+export type { ValidationResult, ValidationError } from "./core";
 
 // React renderer
 export { FlashChart, PieChart, Surface3D, CandlestickChart, useChartAnimation, shimmerFill } from "./react";

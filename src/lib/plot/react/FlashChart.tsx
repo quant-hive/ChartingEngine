@@ -1061,6 +1061,58 @@ function SubplotRenderer({ subplot, theme, sceneWidth, animate = true }: { subpl
         return null;
       })}
 
+      {/* ── Edge Distribution (sideways histogram overlay) ── */}
+      {subplot.edgeDistribution && (() => {
+        const ed = subplot.edgeDistribution;
+        const edX = pa.x + pa.w - ed.marginWidth;
+        return (
+          <g key="edge-dist" style={visible ? { animation: `fp-areaFade 0.8s ease 1.5s both` } : { opacity: 0 }}>
+            {/* Histogram bars (extending leftward from right edge) */}
+            {ed.bars.map((bar, i) => (
+              <rect
+                key={`ed-bar-${i}`}
+                x={(edX + ed.marginWidth - bar.width).toFixed(1)}
+                y={bar.y.toFixed(1)}
+                width={bar.width.toFixed(1)}
+                height={Math.max(0.5, bar.height).toFixed(1)}
+                fill={ed.color}
+                opacity={ed.opacity}
+                rx="1"
+              />
+            ))}
+            {/* Annotation markers and labels */}
+            {ed.annotations.map((ann, i) => {
+              const diamondSize = 5;
+              const markerX = edX + ed.marginWidth * 0.45;
+              return (
+                <g key={`ed-ann-${i}`}>
+                  {/* Dashed horizontal line */}
+                  <line
+                    x1={(markerX - 12).toFixed(1)} y1={ann.y.toFixed(1)}
+                    x2={(markerX + 12).toFixed(1)} y2={ann.y.toFixed(1)}
+                    stroke={ann.color} strokeWidth={1} strokeDasharray="3 2"
+                  />
+                  {/* Diamond marker */}
+                  <polygon
+                    points={`${markerX},${ann.y - diamondSize} ${markerX + diamondSize},${ann.y} ${markerX},${ann.y + diamondSize} ${markerX - diamondSize},${ann.y}`}
+                    fill={ann.color} stroke={ann.color} strokeWidth={0.5}
+                  />
+                  {/* Label text */}
+                  <text
+                    x={(edX + ed.marginWidth + 4).toFixed(1)}
+                    y={(ann.y + 3.5).toFixed(1)}
+                    fontSize={9} fontFamily="'Inter', sans-serif" fontWeight={500}
+                    fill={ann.color} textAnchor="start"
+                  >
+                    {ann.label}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        );
+      })()}
+
       {/* ── Bar tooltip top layer (rendered after all bars so never occluded) ── */}
       {barTipData.map(t => {
         const isHovered = hoveredBar === t.id;

@@ -8,6 +8,8 @@ export { getTheme, registerTheme, listThemes, FLASH_DARK } from "./theme";
 export { computeTicks, computeLinearTicks, computeLogTicks, pickLabels, linearScale, logScale, scaleValue, generateTickMarks } from "./scales";
 export { computeLayout, computeSubplotBounds, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_PADDING, DEFAULT_INSET } from "./layout";
 export { buildLinePath, buildAreaPath, buildFillBetweenPath, buildBarRects, buildScatterPoints, computeHistogramBins, dashArray, mapPoint } from "./paths";
+export { ChartSpecSchema, validateChartSpec, HEX_COLOR_REGEX, CHART_TYPES } from "./chartSpecSchema";
+export type { ValidationResult, ValidationError } from "./chartSpecSchema";
 
 // Re-export all types
 export type {
@@ -20,7 +22,7 @@ export type {
   HistOptions, HeatmapOptions, PieOptions, BoxplotOptions,
   AnnotateOptions, TextOptions, GridOptions, LegendOptions,
   // Scene graph
-  Scene, SubplotScene, PlotElement,
+  Scene, SubplotScene, PlotElement, EdgeDistributionScene, EdgeDistributionBar, EdgeDistributionAnnotation,
   LinePlotElement, AreaPlotElement, BarPlotElement, ScatterPlotElement,
   HLinePlotElement, VLinePlotElement, TextPlotElement, AnnotationPlotElement,
   BarRect, ScatterPoint,

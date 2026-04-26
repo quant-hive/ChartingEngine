@@ -251,6 +251,16 @@ export interface ChartSpec {
 
   /** Annotations */
   annotations?: { text: string; x: number; y: number; color?: string }[];
+
+  /** Edge distribution (sideways histogram overlay at chart edge) */
+  edgeDistribution?: {
+    position: "right";
+    values: number[];
+    binEdges: number[];
+    color?: string;
+    opacity?: number;
+    annotations?: { y: number; label: string; color?: string }[];
+  };
 }
 
 // ── renderChart: the universal function ─────────────────────────────────
@@ -353,7 +363,59 @@ export function renderChart(spec: ChartSpec): Scene {
     ax.legend({ loc: spec.legend?.position ?? "best" });
   }
 
-  return fig.render();
+  const scene = fig.render();
+
+  // ── Edge Distribution (sideways histogram overlay)
+  if (spec.edgeDistribution && spec.edgeDistribution.values.length > 0 && scene.subplots[0]) {
+    const ed = spec.edgeDistribution;
+    const sp = scene.subplots[0];
+    const pa = sp.plotArea;
+
+    // Compute y-axis data range from scene
+    const yTicks = sp.yAxis.ticks;
+    let yMin = yTicks.length > 0 ? yTicks[0].value : ed.binEdges[0];
+    let yMax = yTicks.length > 0 ? yTicks[yTicks.length - 1].value : ed.binEdges[ed.binEdges.length - 1];
+    // Override with spec axis config if present
+    if (spec.yAxis?.min != null) yMin = spec.yAxis.min;
+    if (spec.yAxis?.max != null) yMax = spec.yAxis.max;
+    // Fallback: derive from binEdges range
+    if (yMin === yMax) { yMin = ed.binEdges[0]; yMax = ed.binEdges[ed.binEdges.length - 1]; }
+
+    const yRange = yMax - yMin || 1;
+    const marginWidth = pa.w * 0.18;
+    const maxVal = Math.max(...ed.values) || 1;
+
+    const bars: { y: number; height: number; width: number }[] = [];
+    for (let i = 0; i < ed.values.length; i++) {
+      if (i >= ed.binEdges.length - 1) break;
+      const binTop = ed.binEdges[i + 1];
+      const binBot = ed.binEdges[i];
+      // Convert data → pixel (y-axis is inverted in SVG)
+      const pyTop = pa.y + (1 - (binTop - yMin) / yRange) * pa.h;
+      const pyBot = pa.y + (1 - (binBot - yMin) / yRange) * pa.h;
+      const barHeight = Math.abs(pyBot - pyTop);
+      const barY = Math.min(pyTop, pyBot);
+      const barWidth = (ed.values[i] / maxVal) * marginWidth;
+      bars.push({ y: barY, height: barHeight, width: barWidth });
+    }
+
+    const annotations = (ed.annotations ?? []).map(a => ({
+      y: pa.y + (1 - (a.y - yMin) / yRange) * pa.h,
+      label: a.label,
+      color: a.color ?? "#888888",
+    }));
+
+    sp.edgeDistribution = {
+      position: "right",
+      bars,
+      color: ed.color ?? "#2563EB",
+      opacity: ed.opacity ?? 0.3,
+      annotations,
+      marginWidth,
+    };
+  }
+
+  return scene;
 }
 
 // ── Private renderers per chart type ────────────────────────────────────
