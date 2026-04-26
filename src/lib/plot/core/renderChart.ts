@@ -176,7 +176,7 @@ export interface HeatmapSpec {
   /** Column labels */
   colLabels?: string[];
   /** Color range: [min_color, max_color]. Default: theme heatmap palette */
-  colorRange?: [string, string];
+  colorRange?: string[];
 }
 
 export interface AxisSpec {
@@ -246,8 +246,8 @@ export interface ChartSpec {
   height?: number;
 
   /** Reference lines */
-  hlines?: { y: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" }[];
-  vlines?: { x: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" }[];
+  hlines?: { y: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" | "dotted" | "dashdot" }[];
+  vlines?: { x: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" | "dotted" | "dashdot" }[];
 
   /** Annotations */
   annotations?: { text: string; x: number; y: number; color?: string }[];
