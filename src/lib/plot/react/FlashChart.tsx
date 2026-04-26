@@ -6,7 +6,7 @@
  * Uses CSS classes for hover interactions (no React state for hover).
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState, memo } from "react";
 import type {
   Scene, SubplotScene,
   LinePlotElement, AreaPlotElement, BarPlotElement, BarRect, ScatterPlotElement,
@@ -47,7 +47,7 @@ const FP_CSS = `
 @keyframes fp-labelFadeX { from { opacity: 0; transform: translate(0, -6px); } to { opacity: 1; transform: translate(0, 0); } }
 
 /* Phase 3: Data elements */
-@keyframes fp-lineDraw { from { stroke-dashoffset: 2000; } to { stroke-dashoffset: 0; } }
+@keyframes fp-lineDraw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
 @keyframes fp-areaFade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes fp-barGrow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 @keyframes fp-scatterPop { from { opacity: 0; r: 0; } to { opacity: 1; } }
@@ -859,8 +859,8 @@ function SubplotRenderer({ subplot, theme, sceneWidth, animate = true }: { subpl
               <path
                 className="fp-line-path"
                 d={el.path} fill="none" stroke={el.color} strokeWidth={el.lineWidth}
-                strokeLinejoin="round" strokeDasharray="2000" opacity={el.alpha}
-                style={visible ? { animation: `fp-lineDraw 1.89s cubic-bezier(0.22,1,0.36,1) ${delay.toFixed(2)}s both` } : { strokeDashoffset: 2000 }}
+                strokeLinejoin="round" pathLength={1} strokeDasharray="1" opacity={el.alpha}
+                style={visible ? { animation: `fp-lineDraw 1.89s cubic-bezier(0.22,1,0.36,1) ${delay.toFixed(2)}s both` } : { strokeDashoffset: 1 }}
               />
               {da && el.lineStyle !== "solid" && (
                 <path
@@ -1290,7 +1290,7 @@ export interface FlashChartProps {
   animate?: boolean;
 }
 
-export default function FlashChart({ scene, className, animate = true }: FlashChartProps) {
+function FlashChartInner({ scene, className, animate = true }: FlashChartProps) {
   if (!scene?.subplots?.length) return null;
   const theme = getTheme(scene.theme);
 
@@ -1302,3 +1302,6 @@ export default function FlashChart({ scene, className, animate = true }: FlashCh
     </div>
   );
 }
+
+const FlashChart = memo(FlashChartInner);
+export default FlashChart;

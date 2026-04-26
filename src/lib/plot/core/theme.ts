@@ -18,7 +18,7 @@ export const FLASH_DARK: Theme = {
     width: 0.3,
   },
   axis: {
-    fontFamily: "'Inter', sans-serif",
+    fontFamily: "var(--font-eb-garamond), 'EB Garamond', 'Times New Roman', Georgia, serif",
     fontSize: 10,
     fontWeight: 500,
     letterSpacing: "-0.12px",

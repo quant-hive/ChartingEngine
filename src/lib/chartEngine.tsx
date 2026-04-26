@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo, memo } from "react";
 import { createPortal } from "react-dom";
 import { fetchGraphData, type GraphApiResponse } from "./graphApi";
 import { FlashChart, renderChart, type ChartSpec, PieChart, extractPieSlices, Surface3D, type SurfaceMode, CandlestickChart, extractCandlestickData } from "./plot";
@@ -139,6 +139,10 @@ function realignLineElements(subplot: Record<string, unknown>): void {
 }
 
 export function sanitizeApiScene(scene: Record<string, unknown>): Record<string, unknown> {
+  // Unwrap nested scene envelope: { chartType, componentHint, scene: { subplots, ... } }
+  if (!Array.isArray(scene?.subplots) && scene?.scene && typeof scene.scene === "object" && Array.isArray((scene.scene as Record<string, unknown>).subplots)) {
+    return sanitizeApiScene(scene.scene as Record<string, unknown>);
+  }
   if (!scene?.subplots || !Array.isArray(scene.subplots)) return scene;
 
   const sanitized = JSON.parse(JSON.stringify(scene));
@@ -502,7 +506,7 @@ export function ChartCard({ config, chartType = "line" }: { config: ChartConfig;
   const innerCls = chartSettings.axisLabels ? "" : "fp-hide-axis-labels";
 
   return (
-    <div className={`w-full relative pt-4 pb-4 px-4 rounded-lg ${outerCls}`} style={{ background: chartSettings.theme === "naked" ? "transparent" : chartSettings.theme === "light" ? "#fafafa" : "#121212" }}>
+    <div className={`w-full relative px-4 rounded-lg ${outerCls} ${chartSettings.theme === "naked" ? "py-0" : "pt-4 pb-4"}`} style={{ background: chartSettings.theme === "naked" ? "transparent" : chartSettings.theme === "light" ? "#fafafa" : "#121212" }}>
       <div className="absolute top-4 right-4 z-10">
         <ChartSettingsDropdown settings={chartSettings} onChange={setChartSettings} />
       </div>
@@ -1416,7 +1420,7 @@ export function ChartCell({ chartTypeInput }: { chartTypeInput: string }) {
   const outerCls = chartSettings.theme === "light" ? "fp-light" : "";
 
   return (
-    <div className={`w-full relative pt-4 pb-4 px-4 rounded-lg ${outerCls}`} style={{ ...wrapStyle, background: chartSettings.theme === "naked" ? "transparent" : chartSettings.theme === "light" ? "#fafafa" : "#121212" }}>
+    <div className={`w-full relative px-4 rounded-lg ${outerCls} ${chartSettings.theme === "naked" ? "py-0" : "pt-4 pb-4"}`} style={{ ...wrapStyle, background: chartSettings.theme === "naked" ? "transparent" : chartSettings.theme === "light" ? "#fafafa" : "#121212" }}>
       <div className="absolute top-4 right-4 z-10">
         <ChartSettingsDropdown settings={chartSettings} onChange={setChartSettings} />
       </div>
@@ -1467,8 +1471,8 @@ function shrinkAxisFonts(scene: Record<string, unknown>): Record<string, unknown
   return out;
 }
 
-export function ApiChartCell({
-  scene: rawScene,
+export const ApiChartCell = memo(function ApiChartCell({
+  scene: rawSceneProp,
   title: titleOverride,
   subtitle: subtitleOverride,
   compact,
@@ -1486,6 +1490,11 @@ export function ApiChartCell({
   monthlyData?: MonthlyReturnsEntry[];
   period?: string;
 }) {
+  // Unwrap nested scene envelope: { chartType, componentHint, scene: { subplots, ... } }
+  const rawScene = (!Array.isArray(rawSceneProp?.subplots) && rawSceneProp?.scene && typeof rawSceneProp.scene === "object" && Array.isArray((rawSceneProp.scene as Record<string, unknown>).subplots))
+    ? rawSceneProp.scene as Record<string, unknown>
+    : rawSceneProp;
+
   const [chartSettings, setChartSettings] = useState<ChartSettings>({
     gridLines: true,
     axisLabels: true,
@@ -1561,7 +1570,7 @@ export function ApiChartCell({
     const outerCls = chartSettings.theme === "light" ? "fp-light" : "";
     return (
       <div
-        className={`w-full relative pt-4 pb-4 px-4 rounded-lg ${outerCls}`}
+        className={`w-full relative px-4 rounded-lg ${outerCls} ${chartSettings.theme === "naked" ? "py-0" : "pt-4 pb-4"}`}
         style={{
           background: chartSettings.theme === "naked" ? "transparent" : chartSettings.theme === "light" ? "#fafafa" : "#121212",
         }}
@@ -1595,16 +1604,18 @@ export function ApiChartCell({
   const title = titleOverride || extracted.title;
   const subtitle = subtitleOverride || extracted.subtitle;
 
-  let sanitized = sanitizeApiScene(rawScene);
-  if (compact) sanitized = shrinkAxisFonts(sanitized);
-  const stripped = stripSceneTitle(sanitized);
+  const stripped = useMemo(() => {
+    let sanitized = sanitizeApiScene(rawScene);
+    if (compact) sanitized = shrinkAxisFonts(sanitized);
+    return stripSceneTitle(sanitized);
+  }, [rawScene, compact]);
 
   const outerCls = chartSettings.theme === "light" ? "fp-light" : "";
   const innerCls = chartSettings.axisLabels ? "" : "fp-hide-axis-labels";
 
   return (
     <div
-      className={`w-full relative pt-4 pb-4 px-4 rounded-lg ${outerCls}`}
+      className={`w-full relative px-4 rounded-lg ${outerCls} ${chartSettings.theme === "naked" ? "py-0" : "pt-4 pb-4"}`}
       style={{
         background: chartSettings.theme === "naked" ? "transparent" : chartSettings.theme === "light" ? "#fafafa" : "#121212",
       }}
@@ -1618,7 +1629,7 @@ export function ApiChartCell({
       </div>
     </div>
   );
-}
+});
 
 // ── Graph Cell (self-contained: fetches, computes, renders) ─────────────
 
