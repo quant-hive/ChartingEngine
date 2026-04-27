@@ -176,27 +176,6 @@ export interface Scene {
   subplots: SubplotScene[];
 }
 
-export interface EdgeDistributionBar {
-  y: number;
-  height: number;
-  width: number;
-}
-
-export interface EdgeDistributionAnnotation {
-  y: number;
-  label: string;
-  color: string;
-}
-
-export interface EdgeDistributionScene {
-  position: "right";
-  bars: EdgeDistributionBar[];
-  color: string;
-  opacity: number;
-  annotations: EdgeDistributionAnnotation[];
-  marginWidth: number;
-}
-
 export interface SubplotScene {
   row: number;
   col: number;
@@ -212,7 +191,6 @@ export interface SubplotScene {
   grid: GridScene;
   elements: PlotElement[];
   legend?: LegendScene;
-  edgeDistribution?: EdgeDistributionScene;
 }
 
 export interface TextStyle {
@@ -274,7 +252,8 @@ export type PlotElement =
   | HLinePlotElement
   | VLinePlotElement
   | TextPlotElement
-  | AnnotationPlotElement;
+  | AnnotationPlotElement
+  | EdgeDistributionElement;
 
 export interface LinePlotElement {
   type: "line";
@@ -376,6 +355,30 @@ export interface AnnotationPlotElement {
   style: TextStyle;
   arrowColor?: string;
   arrowWidth?: number;
+  zorder: number;
+}
+
+export interface EdgeDistributionBar {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface EdgeDistributionAnnotation {
+  y: number;
+  label: string;
+  color: string;
+}
+
+export interface EdgeDistributionElement {
+  type: "edgeDistribution";
+  bars: EdgeDistributionBar[];
+  color: string;
+  opacity: number;
+  annotations: EdgeDistributionAnnotation[];
+  areaX: number;
+  areaWidth: number;
   zorder: number;
 }
 

@@ -176,7 +176,7 @@ export interface HeatmapSpec {
   /** Column labels */
   colLabels?: string[];
   /** Color range: [min_color, max_color]. Default: theme heatmap palette */
-  colorRange?: string[];
+  colorRange?: [string, string];
 }
 
 export interface AxisSpec {
@@ -246,13 +246,13 @@ export interface ChartSpec {
   height?: number;
 
   /** Reference lines */
-  hlines?: { y: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" | "dotted" | "dashdot" }[];
-  vlines?: { x: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" | "dotted" | "dashdot" }[];
+  hlines?: { y: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" }[];
+  vlines?: { x: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" }[];
 
   /** Annotations */
   annotations?: { text: string; x: number; y: number; color?: string }[];
 
-  /** Edge distribution (sideways histogram overlay at chart edge) */
+  /** Edge distribution — sideways histogram at chart edge (e.g. terminal value distribution) */
   edgeDistribution?: {
     position: "right";
     values: number[];
@@ -365,54 +365,9 @@ export function renderChart(spec: ChartSpec): Scene {
 
   const scene = fig.render();
 
-  // ── Edge Distribution (sideways histogram overlay)
-  if (spec.edgeDistribution && spec.edgeDistribution.values.length > 0 && scene.subplots[0]) {
-    const ed = spec.edgeDistribution;
-    const sp = scene.subplots[0];
-    const pa = sp.plotArea;
-
-    // Compute y-axis data range from scene
-    const yTicks = sp.yAxis.ticks;
-    let yMin = yTicks.length > 0 ? yTicks[0].value : ed.binEdges[0];
-    let yMax = yTicks.length > 0 ? yTicks[yTicks.length - 1].value : ed.binEdges[ed.binEdges.length - 1];
-    // Override with spec axis config if present
-    if (spec.yAxis?.min != null) yMin = spec.yAxis.min;
-    if (spec.yAxis?.max != null) yMax = spec.yAxis.max;
-    // Fallback: derive from binEdges range
-    if (yMin === yMax) { yMin = ed.binEdges[0]; yMax = ed.binEdges[ed.binEdges.length - 1]; }
-
-    const yRange = yMax - yMin || 1;
-    const marginWidth = pa.w * 0.18;
-    const maxVal = Math.max(...ed.values) || 1;
-
-    const bars: { y: number; height: number; width: number }[] = [];
-    for (let i = 0; i < ed.values.length; i++) {
-      if (i >= ed.binEdges.length - 1) break;
-      const binTop = ed.binEdges[i + 1];
-      const binBot = ed.binEdges[i];
-      // Convert data → pixel (y-axis is inverted in SVG)
-      const pyTop = pa.y + (1 - (binTop - yMin) / yRange) * pa.h;
-      const pyBot = pa.y + (1 - (binBot - yMin) / yRange) * pa.h;
-      const barHeight = Math.abs(pyBot - pyTop);
-      const barY = Math.min(pyTop, pyBot);
-      const barWidth = (ed.values[i] / maxVal) * marginWidth;
-      bars.push({ y: barY, height: barHeight, width: barWidth });
-    }
-
-    const annotations = (ed.annotations ?? []).map(a => ({
-      y: pa.y + (1 - (a.y - yMin) / yRange) * pa.h,
-      label: a.label,
-      color: a.color ?? "#888888",
-    }));
-
-    sp.edgeDistribution = {
-      position: "right",
-      bars,
-      color: ed.color ?? "#2563EB",
-      opacity: ed.opacity ?? 0.3,
-      annotations,
-      marginWidth,
-    };
+  // ── Edge Distribution (post-process: inject into scene)
+  if (spec.edgeDistribution && spec.edgeDistribution.values.length > 0) {
+    _injectEdgeDistribution(scene, spec.edgeDistribution);
   }
 
   return scene;
@@ -729,6 +684,86 @@ export function extractCandlestickData(spec: ChartSpec) {
     ticker: s.label,
     interval,
   };
+}
+
+// ── Edge Distribution: post-process injection ──────────────────────────
+
+function _injectEdgeDistribution(
+  scene: Scene,
+  edgeDist: NonNullable<ChartSpec["edgeDistribution"]>
+) {
+  const subplot = scene.subplots[0];
+  if (!subplot) return;
+
+  const pa = subplot.plotArea;
+  const distWidthFraction = 0.18;
+  const distWidth = pa.w * distWidthFraction;
+  const distX = pa.x + pa.w - distWidth;
+
+  // Shrink plotArea so main chart elements don't overlap the distribution zone
+  subplot.plotArea = { ...pa, w: pa.w - distWidth - 8 };
+
+  // Map binEdges to y-axis pixel positions
+  // Use the y-axis ticks to infer the data range
+  const yTicks = subplot.yAxis.ticks;
+  let yMin = edgeDist.binEdges[0];
+  let yMax = edgeDist.binEdges[edgeDist.binEdges.length - 1];
+  if (yTicks.length >= 2) {
+    // Infer actual rendered y range from tick positions and labels
+    const firstTick = yTicks[0];
+    const lastTick = yTicks[yTicks.length - 1];
+    const firstVal = parseFloat(firstTick.label);
+    const lastVal = parseFloat(lastTick.label);
+    if (!isNaN(firstVal) && !isNaN(lastVal)) {
+      // Map from data value → pixel using linear interpolation of tick positions
+      const yMinPx = firstTick.position; // lower value → higher pixel y
+      const yMaxPx = lastTick.position;  // higher value → lower pixel y
+      yMin = firstVal;
+      yMax = lastVal;
+    }
+  }
+
+  const mapYToPixel = (dataY: number): number => {
+    const t = (dataY - yMin) / ((yMax - yMin) || 1);
+    return pa.y + pa.h - t * pa.h;
+  };
+
+  // Normalize bar widths to fit in distWidth
+  const maxVal = Math.max(...edgeDist.values, 0.001);
+  const color = edgeDist.color ?? "#2563EB";
+  const opacity = edgeDist.opacity ?? 0.3;
+
+  const bars: import("./types").EdgeDistributionBar[] = [];
+  for (let i = 0; i < edgeDist.values.length; i++) {
+    if (i >= edgeDist.binEdges.length - 1) break;
+    const binTop = mapYToPixel(edgeDist.binEdges[i + 1]);
+    const binBot = mapYToPixel(edgeDist.binEdges[i]);
+    const barH = Math.abs(binBot - binTop);
+    const barW = (edgeDist.values[i] / maxVal) * distWidth;
+    bars.push({
+      x: distX + distWidth - barW, // bars extend leftward from right edge
+      y: Math.min(binTop, binBot),
+      width: barW,
+      height: Math.max(barH, 0.5),
+    });
+  }
+
+  const annotations: import("./types").EdgeDistributionAnnotation[] = (edgeDist.annotations ?? []).map(a => ({
+    y: mapYToPixel(a.y),
+    label: a.label,
+    color: a.color ?? "#808080",
+  }));
+
+  subplot.elements.push({
+    type: "edgeDistribution",
+    bars,
+    color,
+    opacity,
+    annotations,
+    areaX: distX,
+    areaWidth: distWidth,
+    zorder: 999,
+  });
 }
 
 export function extractSurfaceSpec(spec: ChartSpec) {
