@@ -109,18 +109,6 @@ function renderLegend(legend: LegendScene, plotArea: { x: number; y: number; w: 
     .join("\n");
 }
 
-function renderEdgeDistribution(el: any): string {
-  const parts: string[] = [];
-  for (const bar of el.bars) {
-    parts.push(`<rect x="${bar.x}" y="${bar.y}" width="${bar.width}" height="${bar.height}" fill="${el.color}" opacity="${el.opacity}" rx="1"/>`);
-  }
-  for (const ann of el.annotations) {
-    parts.push(`<line x1="${el.areaX - 4}" y1="${ann.y}" x2="${el.areaX + 16}" y2="${ann.y}" stroke="${ann.color}" stroke-width="0.8" stroke-dasharray="3 2"/>`);
-    parts.push(`<text x="${el.areaX + el.areaWidth + 4}" y="${ann.y + 3}" font-size="8" font-weight="500" font-family="'Inter', sans-serif" fill="${ann.color}">${esc(ann.label)}</text>`);
-  }
-  return parts.join("\n");
-}
-
 function renderElement(el: PlotElement, theme: Theme, plotId: string, gradientId: string): string {
   switch (el.type) {
     case "line": return renderLine(el);
@@ -131,7 +119,6 @@ function renderElement(el: PlotElement, theme: Theme, plotId: string, gradientId
     case "vline": return renderVLine(el);
     case "text": return renderText(el);
     case "annotation": return renderAnnotation(el);
-    case "edgeDistribution": return renderEdgeDistribution(el);
   }
 }
 

@@ -22,10 +22,9 @@ export type {
   HistOptions, HeatmapOptions, PieOptions, BoxplotOptions,
   AnnotateOptions, TextOptions, GridOptions, LegendOptions,
   // Scene graph
-  Scene, SubplotScene, PlotElement,
+  Scene, SubplotScene, PlotElement, EdgeDistributionScene, EdgeDistributionBar, EdgeDistributionAnnotation,
   LinePlotElement, AreaPlotElement, BarPlotElement, ScatterPlotElement,
   HLinePlotElement, VLinePlotElement, TextPlotElement, AnnotationPlotElement,
-  EdgeDistributionElement, EdgeDistributionBar, EdgeDistributionAnnotation,
   BarRect, ScatterPoint,
   AxisScene, GridScene, GridLine, LegendScene, LegendEntry,
   TextStyle,

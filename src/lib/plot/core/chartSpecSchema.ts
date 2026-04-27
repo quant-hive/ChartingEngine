@@ -144,14 +144,14 @@ const BaseChartSpecSchema = z.object({
   })).optional(),
   edgeDistribution: z.object({
     position:    z.enum(["right"]),
-    values:      z.array(z.number()).min(1, "must have at least one bin value"),
+    values:      z.array(z.number()).min(1, "must be a non-empty array of bin heights"),
     binEdges:    z.array(z.number()).min(2, "must have at least 2 bin edges"),
-    color:       hexColor.optional(),
+    color:       z.string().optional(),
     opacity:     z.number().min(0).max(1).optional(),
     annotations: z.array(z.object({
       y:     z.number(),
       label: z.string(),
-      color: hexColor.optional(),
+      color: z.string().optional(),
     })).optional(),
   }).optional(),
 });

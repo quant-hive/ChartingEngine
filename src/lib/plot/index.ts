@@ -37,6 +37,7 @@ export type {
   TextStyle,
   Theme, BarThemeStyle,
   FigureConfig,
+  EdgeDistributionScene, EdgeDistributionBar, EdgeDistributionAnnotation,
 } from "./core";
 
 // Validator
