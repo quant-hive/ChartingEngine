@@ -10,8 +10,6 @@ export { computeLayout, computeSubplotBounds, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEF
 export { buildLinePath, buildAreaPath, buildFillBetweenPath, buildBarRects, buildScatterPoints, computeHistogramBins, dashArray, mapPoint } from "./paths";
 export { ChartSpecSchema, validateChartSpec, HEX_COLOR_REGEX, CHART_TYPES } from "./chartSpecSchema";
 export type { ValidationResult, ValidationError } from "./chartSpecSchema";
-export { applyTemplate, listTemplates } from "./templates";
-export type { TemplateName, TemplateData, RevenueMarginData, SegmentRevenueData, PeerComparisonData, PeerValuationData, DCFSensitivityData, CandlestickTechnicalsData, WaterfallBridgeData, ShareholdingData } from "./templates";
 
 // Re-export all types
 export type {
@@ -24,7 +22,7 @@ export type {
   HistOptions, HeatmapOptions, PieOptions, BoxplotOptions,
   AnnotateOptions, TextOptions, GridOptions, LegendOptions,
   // Scene graph
-  Scene, SubplotScene, PlotElement,
+  Scene, SubplotScene, PlotElement, EdgeDistributionScene, EdgeDistributionBar, EdgeDistributionAnnotation,
   LinePlotElement, AreaPlotElement, BarPlotElement, ScatterPlotElement,
   HLinePlotElement, VLinePlotElement, TextPlotElement, AnnotationPlotElement,
   BarRect, ScatterPoint,
