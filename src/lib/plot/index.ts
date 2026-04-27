@@ -19,6 +19,8 @@ export {
   computeTicks, computeLinearTicks, computeLogTicks, pickLabels, linearScale, logScale, scaleValue, generateTickMarks,
   computeLayout, computeSubplotBounds, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_PADDING, DEFAULT_INSET,
   buildLinePath, buildAreaPath, buildFillBetweenPath, buildBarRects, buildScatterPoints, computeHistogramBins, dashArray, mapPoint,
+  applyTemplate, listTemplates,
+  validateChartSpec, ChartSpecSchema, HEX_COLOR_REGEX, CHART_TYPES,
 } from "./core";
 
 // Re-export all types
@@ -37,12 +39,11 @@ export type {
   TextStyle,
   Theme, BarThemeStyle,
   FigureConfig,
-  EdgeDistributionScene, EdgeDistributionBar, EdgeDistributionAnnotation,
+  TemplateName, TemplateData,
+  RevenueMarginData, SegmentRevenueData, PeerComparisonData, PeerValuationData,
+  DCFSensitivityData, CandlestickTechnicalsData, WaterfallBridgeData, ShareholdingData,
+  ValidationResult, ValidationError,
 } from "./core";
-
-// Validator
-export { validateChartSpec, ChartSpecSchema, HEX_COLOR_REGEX, CHART_TYPES } from "./core";
-export type { ValidationResult, ValidationError } from "./core";
 
 // React renderer
 export { FlashChart, PieChart, Surface3D, CandlestickChart, useChartAnimation, shimmerFill } from "./react";
