@@ -115,12 +115,17 @@ const FP_CSS = `
 /* ── Bar interactions ──────────────────────────────────────────────── */
 .fp-bar { cursor: pointer; }
 
-/* Always-on glow (primary series): drift + sparkle always play */
-.fp-glow-on .fp-drift1 { animation: fp-glowDrift1 4s ease-in-out infinite; }
-.fp-glow-on .fp-drift2 { animation: fp-glowDrift2 3.5s ease-in-out 0.3s infinite; }
-.fp-glow-on .fp-drift3 { animation: fp-glowDrift3 3.8s ease-in-out 0.2s infinite; }
-.fp-glow-on .fp-drift1b { animation: fp-glowDrift1 4.2s ease-in-out 0.5s infinite; }
-.fp-glow-on .fp-sparkle { animation: var(--fp-sparkle-anim); }
+/* Glow (primary series): drift + sparkle paused by default, run on hover */
+.fp-glow-on .fp-drift1 { animation: fp-glowDrift1 4s ease-in-out infinite paused; }
+.fp-glow-on .fp-drift2 { animation: fp-glowDrift2 3.5s ease-in-out 0.3s infinite paused; }
+.fp-glow-on .fp-drift3 { animation: fp-glowDrift3 3.8s ease-in-out 0.2s infinite paused; }
+.fp-glow-on .fp-drift1b { animation: fp-glowDrift1 4.2s ease-in-out 0.5s infinite paused; }
+.fp-glow-on .fp-sparkle { animation: var(--fp-sparkle-anim); animation-play-state: paused; }
+.fp-bar:hover .fp-glow-on .fp-drift1,
+.fp-bar:hover .fp-glow-on .fp-drift2,
+.fp-bar:hover .fp-glow-on .fp-drift3,
+.fp-bar:hover .fp-glow-on .fp-drift1b,
+.fp-bar:hover .fp-glow-on .fp-sparkle { animation-play-state: running; }
 
 /* Hover-only glow (secondary series): hidden by default, shown on hover */
 .fp-glow-hover { opacity: 0; transition: opacity 0.35s ease-out; }
@@ -333,7 +338,7 @@ function ScatterHoverOverlay({ subplot, uid }: { subplot: SubplotScene; uid: str
 
 // ── Subplot Renderer ────────────────────────────────────────────────────
 
-function SubplotRenderer({ subplot, theme, sceneWidth, animate = true }: { subplot: SubplotScene; theme: Theme; sceneWidth?: number; animate?: boolean }) {
+function SubplotRenderer({ subplot, theme, sceneWidth, animate = true, overlay, overlayTop }: { subplot: SubplotScene; theme: Theme; sceneWidth?: number; animate?: boolean; overlay?: React.ReactNode; overlayTop?: React.ReactNode }) {
   const ref = useRef<SVGSVGElement>(null);
   const [visible, setVisible] = useState(!animate);
   const [hoveredSeg, setHoveredSeg] = useState<string | null>(null);
@@ -497,8 +502,8 @@ function SubplotRenderer({ subplot, theme, sceneWidth, animate = true }: { subpl
           const area = el as AreaPlotElement;
           return (
             <linearGradient key={`ag-${i}`} id={`areaGrad-${uid}-${i}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={area.color} stopOpacity={0.15} />
-              <stop offset="100%" stopColor={area.color} stopOpacity={0.05} />
+              <stop offset="0%" stopColor={area.color} stopOpacity={area.alpha} />
+              <stop offset="100%" stopColor={area.color} stopOpacity={0} />
             </linearGradient>
           );
         })}
@@ -1197,9 +1202,15 @@ function SubplotRenderer({ subplot, theme, sceneWidth, animate = true }: { subpl
         );
       })()}
 
+      {/* ── Custom overlay (above chart, below tooltips) ───────── */}
+      {overlay}
+
       {/* ── Hover overlays (rendered last so they're on top) ──────── */}
       {hasLineEls && <LineHoverOverlay subplot={subplot} uid={uid} />}
       {hasScatterEls && <ScatterHoverOverlay subplot={subplot} uid={uid} />}
+
+      {/* ── Top overlay (above everything, for interactive controls) ── */}
+      {overlayTop}
     </svg>
   );
 
@@ -1340,16 +1351,20 @@ export interface FlashChartProps {
   scene: Scene;
   className?: string;
   animate?: boolean;
+  /** SVG content rendered inside the chart SVG, above chart elements but below tooltips */
+  overlay?: React.ReactNode;
+  /** SVG content rendered above everything (including tooltips) — use for interactive overlay controls */
+  overlayTop?: React.ReactNode;
 }
 
-function FlashChartInner({ scene, className, animate = true }: FlashChartProps) {
+function FlashChartInner({ scene, className, animate = true, overlay, overlayTop }: FlashChartProps) {
   if (!scene?.subplots?.length) return null;
   const theme = getTheme(scene.theme);
 
   return (
     <div className={className}>
       {scene.subplots.map((subplot, i) => (
-        <SubplotRenderer key={i} subplot={subplot} theme={theme} sceneWidth={scene.width} animate={animate} />
+        <SubplotRenderer key={i} subplot={subplot} theme={theme} sceneWidth={scene.width} animate={animate} overlay={i === 0 ? overlay : undefined} overlayTop={i === 0 ? overlayTop : undefined} />
       ))}
     </div>
   );

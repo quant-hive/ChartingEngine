@@ -98,7 +98,7 @@ export const DEFAULT_COLORS = {
 // ── ChartSpec: the JSON schema the agent sends ─────────────────────────
 
 export interface SeriesSpec {
-  /** Y-axis values (close prices for candlestick) */
+  /** Y-axis values (close prices for candlestick). May contain null for confidence cone gaps. */
   data: number[];
   /** Optional X-axis values (defaults to 0, 1, 2, ...) */
   x?: number[];
@@ -106,12 +106,16 @@ export interface SeriesSpec {
   label?: string;
   /** Hex color (e.g. "#4ECDC4"). Falls back to chart-type default palette */
   color?: string;
-  /** Line width (line charts). Default: 1.5 */
+  /** Line width (line charts). Default: 1.5. Set to 0 for band-boundary-only series */
   lineWidth?: number;
   /** Line style. Default: "solid" */
   lineStyle?: "solid" | "dashed" | "dotted" | "dashdot";
   /** Fill opacity for area under line. 0 = no fill. Default: 0 */
   fillOpacity?: number;
+  /** Label of the paired lower-boundary series to fill between (confidence cone) */
+  fillTo?: string;
+  /** Whether to show this series in the legend. Default: true */
+  showInLegend?: boolean;
   /** Bar width fraction (bar charts). Default: 0.8 */
   barWidth?: number;
   /** Stack on top of previous series (bar charts). Default: false */
@@ -176,7 +180,7 @@ export interface HeatmapSpec {
   /** Column labels */
   colLabels?: string[];
   /** Color range: [min_color, max_color]. Default: theme heatmap palette */
-  colorRange?: string[];
+  colorRange?: [string, string];
 }
 
 export interface AxisSpec {
@@ -246,20 +250,19 @@ export interface ChartSpec {
   height?: number;
 
   /** Reference lines */
-  hlines?: { y: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" | "dotted" | "dashdot" }[];
-  vlines?: { x: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" | "dotted" | "dashdot" }[];
+  hlines?: { y: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" }[];
+  vlines?: { x: number; color?: string; label?: string; lineStyle?: "solid" | "dashed" }[];
 
   /** Annotations */
   annotations?: { text: string; x: number; y: number; color?: string }[];
 
-  /** Edge distribution (sideways histogram overlay at chart edge) */
+  /** Edge distribution (sideways histogram) for confidence cone charts */
   edgeDistribution?: {
     position: "right";
     values: number[];
     binEdges: number[];
     color?: string;
     opacity?: number;
-    annotations?: { y: number; label: string; color?: string }[];
   };
 }
 
@@ -350,8 +353,9 @@ export function renderChart(spec: ChartSpec): Scene {
     }
   }
 
-  // ── Annotations
-  if (spec.annotations) {
+  // ── Annotations (skip for confidence cone — handled in its renderer)
+  const isConeChart = (spec.series ?? []).some((s) => s.fillTo != null);
+  if (spec.annotations && !isConeChart) {
     for (const ann of spec.annotations) {
       ax.text(ann.x, ann.y, ann.text, { color: ann.color ?? "#808080" });
     }
@@ -363,77 +367,180 @@ export function renderChart(spec: ChartSpec): Scene {
     ax.legend({ loc: spec.legend?.position ?? "best" });
   }
 
-  const scene = fig.render();
-
-  // ── Edge Distribution (sideways histogram overlay)
-  if (spec.edgeDistribution && spec.edgeDistribution.values.length > 0 && scene.subplots[0]) {
-    const ed = spec.edgeDistribution;
-    const sp = scene.subplots[0];
-    const pa = sp.plotArea;
-
-    // Compute y-axis data range from scene
-    const yTicks = sp.yAxis.ticks;
-    let yMin = yTicks.length > 0 ? yTicks[0].value : ed.binEdges[0];
-    let yMax = yTicks.length > 0 ? yTicks[yTicks.length - 1].value : ed.binEdges[ed.binEdges.length - 1];
-    // Override with spec axis config if present
-    if (spec.yAxis?.min != null) yMin = spec.yAxis.min;
-    if (spec.yAxis?.max != null) yMax = spec.yAxis.max;
-    // Fallback: derive from binEdges range
-    if (yMin === yMax) { yMin = ed.binEdges[0]; yMax = ed.binEdges[ed.binEdges.length - 1]; }
-
-    const yRange = yMax - yMin || 1;
-    const marginWidth = pa.w * 0.18;
-    const maxVal = Math.max(...ed.values) || 1;
-
-    const bars: { y: number; height: number; width: number }[] = [];
-    for (let i = 0; i < ed.values.length; i++) {
-      if (i >= ed.binEdges.length - 1) break;
-      const binTop = ed.binEdges[i + 1];
-      const binBot = ed.binEdges[i];
-      // Convert data → pixel (y-axis is inverted in SVG)
-      const pyTop = pa.y + (1 - (binTop - yMin) / yRange) * pa.h;
-      const pyBot = pa.y + (1 - (binBot - yMin) / yRange) * pa.h;
-      const barHeight = Math.abs(pyBot - pyTop);
-      const barY = Math.min(pyTop, pyBot);
-      const barWidth = (ed.values[i] / maxVal) * marginWidth;
-      bars.push({ y: barY, height: barHeight, width: barWidth });
-    }
-
-    const annotations = (ed.annotations ?? []).map(a => ({
-      y: pa.y + (1 - (a.y - yMin) / yRange) * pa.h,
-      label: a.label,
-      color: a.color ?? "#888888",
-    }));
-
-    sp.edgeDistribution = {
-      position: "right",
-      bars,
-      color: ed.color ?? "#2563EB",
-      opacity: ed.opacity ?? 0.3,
-      annotations,
-      marginWidth,
-    };
-  }
-
-  return scene;
+  return fig.render();
 }
 
 // ── Private renderers per chart type ────────────────────────────────────
 
 function _renderLine(ax: Axes, spec: ChartSpec, palette: string[]) {
   const series = spec.series ?? [];
+  const isCone = series.some((s) => s.fillTo != null);
+
+  if (isCone) {
+    _renderConfidenceCone(ax, spec, palette);
+    return;
+  }
+
   for (let i = 0; i < series.length; i++) {
     const s = series[i];
     const color = s.color ?? palette[i % palette.length];
     const xData = s.x ?? s.data.map((_, idx) => idx);
-    ax.plot(xData, s.data, {
+    ax.plot(xData, s.data as number[], {
       color,
       label: s.label,
       linewidth: s.lineWidth ?? 1.5,
       linestyle: s.lineStyle ?? "solid",
     });
-    if (s.fillOpacity && s.fillOpacity > 0) {
-      ax.fill_between(xData, s.data, 0, { color, alpha: s.fillOpacity });
+    if (s.fillOpacity && s.fillOpacity > 0 && !s.fillTo) {
+      ax.fill_between(xData, s.data as number[], 0, { color, alpha: s.fillOpacity });
+    }
+  }
+}
+
+function _renderConfidenceCone(ax: Axes, spec: ChartSpec, palette: string[]) {
+  const series = spec.series ?? [];
+  const seriesByLabel: Record<string, SeriesSpec> = {};
+  for (const s of series) {
+    if (s.label) seriesByLabel[s.label] = s;
+  }
+
+  type NullableData = (number | null)[];
+  const getData = (s: SeriesSpec): NullableData => s.data as unknown as NullableData;
+
+  const dataLen = Math.max(...series.map((s) => s.data.length));
+  const xAll = Array.from({ length: dataLen }, (_, i) => i);
+
+  // Edge distribution rendered as smooth filled curve on the right margin
+  if (spec.edgeDistribution) {
+    const { values, binEdges, color = "#94a3b8", opacity = 0.25 } = spec.edgeDistribution;
+    const maxVal = Math.max(...values);
+    const xMax = dataLen - 1;
+    const edgeRight = xMax + (dataLen * 0.22);
+    const barMaxWidth = dataLen * 0.18;
+
+    // Build smooth curve: use bin centers as y-coordinates, plot as fill_between
+    // with the right edge as baseline and curve going left proportional to value
+    const yPoints: number[] = [];
+    const xCurve: number[] = [];
+    const xBase: number[] = [];
+    for (let i = 0; i < values.length; i++) {
+      const yMid = (binEdges[i] + binEdges[i + 1]) / 2;
+      const barWidth = (values[i] / maxVal) * barMaxWidth;
+      yPoints.push(yMid);
+      xCurve.push(edgeRight - barWidth);
+      xBase.push(edgeRight);
+    }
+    // Render as a filled area between the curve and the right edge (vertical axis = y)
+    // Since fill_between works with x as the sweep axis, we approximate by drawing
+    // many thin horizontal fills for smoothness
+    for (let i = 0; i < yPoints.length - 1; i++) {
+      const steps = 4;
+      for (let s = 0; s < steps; s++) {
+        const t = s / steps;
+        const t2 = (s + 1) / steps;
+        const y0 = yPoints[i] + t * (yPoints[i + 1] - yPoints[i]);
+        const y1 = yPoints[i] + t2 * (yPoints[i + 1] - yPoints[i]);
+        const x0 = xCurve[i] + t * (xCurve[i + 1] - xCurve[i]);
+        const x1 = xCurve[i] + t2 * (xCurve[i + 1] - xCurve[i]);
+        const xMid = (x0 + x1) / 2;
+        ax.fill_between(
+          [xMid, edgeRight],
+          [y1, y1],
+          [y0, y0],
+          { color, alpha: opacity }
+        );
+      }
+    }
+  }
+
+  // Render background area fills (volume/volatility mountains) — series with fillOpacity but no fillTo
+  for (const s of series) {
+    if (s.fillTo || !s.fillOpacity || s.fillOpacity <= 0) continue;
+    if (s.lineWidth !== 0 && s.lineWidth !== undefined) continue;
+    const data = getData(s);
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] != null) { xs.push(i); ys.push(data[i]!); }
+    }
+    if (xs.length > 0) {
+      const color = s.color ?? palette[0];
+      ax.fill_between(xs, ys, 0, { color, alpha: s.fillOpacity });
+    }
+  }
+
+  // Render fill bands (cone shape)
+  for (const upper of series.filter((s) => s.fillTo)) {
+    const lower = seriesByLabel[upper.fillTo!];
+    if (!lower) continue;
+
+    const upperData = getData(upper);
+    const lowerData = getData(lower);
+    const xs: number[] = [];
+    const y1: number[] = [];
+    const y2: number[] = [];
+    for (let i = 0; i < dataLen; i++) {
+      const uv = upperData[i];
+      const lv = lowerData[i];
+      if (uv != null && lv != null) {
+        xs.push(i);
+        y1.push(uv);
+        y2.push(lv);
+      }
+    }
+    if (xs.length > 0) {
+      const color = upper.color ?? palette[0];
+      ax.fill_between(xs, y1, y2, { color, alpha: upper.fillOpacity ?? 0.1 });
+    }
+  }
+
+  // Render lines (skip nulls — draw segmented)
+  for (let i = 0; i < series.length; i++) {
+    const s = series[i];
+    if (s.lineWidth === 0) continue;
+
+    const color = s.color ?? palette[i % palette.length];
+    const data = getData(s);
+    const xData = s.x ?? xAll.slice(0, data.length);
+
+    let segX: number[] = [];
+    let segY: number[] = [];
+    for (let j = 0; j <= data.length; j++) {
+      const v = j < data.length ? data[j] : null;
+      if (v != null) {
+        segX.push(xData[j]);
+        segY.push(v);
+      } else if (segX.length > 1) {
+        ax.plot(segX, segY, {
+          color,
+          label: s.showInLegend !== false ? s.label : undefined,
+          linewidth: s.lineWidth ?? 1.5,
+          linestyle: s.lineStyle ?? "solid",
+        });
+        segX = [];
+        segY = [];
+      } else {
+        segX = [];
+        segY = [];
+      }
+    }
+  }
+
+  // Render annotation markers with dashed horizontal lines + text
+  if (spec.annotations) {
+    const xMax = dataLen - 1;
+    const lineEnd = spec.edgeDistribution ? xMax + (dataLen * 0.22) : xMax;
+    for (const ann of spec.annotations) {
+      // Dashed horizontal line from annotation to edge distribution
+      ax.plot([ann.x, lineEnd], [ann.y, ann.y], {
+        color: ann.color ?? "#666666",
+        linewidth: 1,
+        linestyle: "dashed",
+      });
+      // Diamond marker at the annotation point
+      ax.scatter([ann.x], [ann.y], { color: ann.color ?? "#333333", s: 8, marker: "d" });
+      // Text label above/beside the marker
+      ax.text(ann.x + 0.5, ann.y, ann.text, { color: ann.color ?? "#808080", fontsize: 9 });
     }
   }
 }
